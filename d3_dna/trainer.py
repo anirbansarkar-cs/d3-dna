@@ -1,0 +1,409 @@
+"""
+D3-DNA Training
+
+Provides D3LightningModule, D3DataModule, BaseTrainer, and the high-level D3Trainer.
+"""
+
+import os
+import datetime
+from typing import Any, Dict, Optional, Tuple
+from itertools import chain
+
+import torch
+import torch.nn.functional as F
+import pytorch_lightning as pl
+from pytorch_lightning.callbacks import ModelCheckpoint, LearningRateMonitor, EarlyStopping
+from pytorch_lightning.loggers import TensorBoardLogger
+from omegaconf import OmegaConf
+
+torch.set_float32_matmul_precision('medium')
+
+from d3_dna.models.ema import ExponentialMovingAverage
+from d3_dna.models import TransformerModel, ConvolutionalModel
+from d3_dna.diffusion import get_loss_fn, get_optimizer, get_graph, get_noise
+from d3_dna.io import get_score_fn, get_logger, load_config
+
+
+class D3LightningModule(pl.LightningModule):
+    """
+    PyTorch Lightning module for D3 DNA Discrete Diffusion.
+
+    Config-driven: creates the model from config.model.architecture
+    without requiring subclassing. For custom architectures, subclass
+    and override create_model().
+    """
+
+    def __init__(self, cfg, dataset_name: Optional[str] = None):
+        super().__init__()
+        self.save_hyperparameters()
+        self.cfg = cfg
+        self.dataset_name = dataset_name
+
+        self.score_model = None
+        self.graph = None
+        self.noise = None
+        self.ema = None
+        self.loss_fn = None
+        self.sampling_eps = 1e-5
+
+        self.accum_iter = 0
+        self.total_loss = 0
+
+    def create_model(self):
+        """
+        Create the score model from config.
+
+        Override this to use a custom architecture.
+        """
+        arch = self.cfg.model.architecture
+        if arch == 'transformer':
+            return TransformerModel(self.cfg)
+        elif arch == 'convolutional':
+            return ConvolutionalModel(self.cfg)
+        else:
+            raise ValueError(
+                f"Unknown architecture '{arch}'. "
+                "Expected 'transformer' or 'convolutional'. "
+                "Subclass D3LightningModule and override create_model() for custom architectures."
+            )
+
+    def setup_ema(self):
+        """Setup EMA after model is created."""
+        if self.score_model is not None:
+            self.ema = ExponentialMovingAverage(
+                self.score_model.parameters(),
+                decay=self.cfg.training.ema
+            )
+
+    def setup(self, stage: str = None):
+        """Setup method called after the model is moved to device."""
+        if self.score_model is None:
+            self.score_model = self.create_model()
+            self.setup_ema()
+
+        self.graph = get_graph(self.cfg, self.device)
+        self.noise = get_noise(self.cfg).to(self.device)
+
+        if hasattr(self, 'ema') and hasattr(self.ema, 'shadow_params'):
+            for i, shadow_param in enumerate(self.ema.shadow_params):
+                self.ema.shadow_params[i] = shadow_param.to(self.device)
+
+        self.loss_fn = get_loss_fn(
+            self.noise, self.graph, train=True, sampling_eps=self.sampling_eps
+        )
+
+    def process_batch(self, batch):
+        """Process batch data into inputs and targets."""
+        if isinstance(batch, (list, tuple)) and len(batch) == 2:
+            inputs, target = batch
+            return inputs, target
+        else:
+            return batch, None
+
+    def training_step(self, batch, batch_idx):
+        """Training step with gradient accumulation support."""
+        inputs, target = self.process_batch(batch)
+
+        if target is not None:
+            loss = self.loss_fn(self.score_model, inputs, target).mean()
+        else:
+            loss = self.loss_fn(self.score_model, inputs).mean()
+
+        loss = loss / self.cfg.training.accum
+
+        self.accum_iter += 1
+        self.total_loss += loss.detach()
+
+        if self.accum_iter == self.cfg.training.accum:
+            self.accum_iter = 0
+            if self.ema is not None:
+                self.ema.update(self.score_model.parameters())
+
+            accumulated_loss_log = self.total_loss
+            self.log('train_loss', accumulated_loss_log, on_step=True, on_epoch=True, prog_bar=True, sync_dist=True)
+            self.total_loss = 0
+
+        return loss
+
+    def validation_step(self, batch, batch_idx):
+        """Validation step using EMA weights."""
+        inputs, target = self.process_batch(batch)
+
+        if self.ema is not None:
+            self.ema.store(self.score_model.parameters())
+            self.ema.copy_to(self.score_model.parameters())
+
+        eval_loss_fn = get_loss_fn(
+            self.noise, self.graph, train=False, sampling_eps=self.sampling_eps
+        )
+
+        with torch.no_grad():
+            if target is not None:
+                loss = eval_loss_fn(self.score_model, inputs, target).mean()
+            else:
+                loss = eval_loss_fn(self.score_model, inputs).mean()
+
+        if self.ema is not None:
+            self.ema.restore(self.score_model.parameters())
+
+        self.log('val_loss', loss, on_step=False, on_epoch=True, prog_bar=True, sync_dist=True)
+        return loss
+
+    def configure_optimizers(self):
+        """Configure optimizer and scheduler."""
+        params = chain(self.score_model.parameters(), self.noise.parameters())
+        optimizer = get_optimizer(self.cfg, params)
+
+        if self.cfg.optim.warmup > 0:
+            def lr_lambda(step):
+                if step < self.cfg.optim.warmup:
+                    return step / self.cfg.optim.warmup
+                return 1.0
+
+            scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
+            return {
+                'optimizer': optimizer,
+                'lr_scheduler': {
+                    'scheduler': scheduler,
+                    'interval': 'step',
+                    'frequency': 1,
+                }
+            }
+
+        return optimizer
+
+    def on_before_optimizer_step(self, optimizer):
+        """Gradient clipping before optimizer step."""
+        if self.cfg.optim.grad_clip >= 0:
+            self.clip_gradients(
+                optimizer,
+                gradient_clip_val=self.cfg.optim.grad_clip,
+                gradient_clip_algorithm="norm"
+            )
+
+    def load_from_original_checkpoint(self, checkpoint_path: str):
+        """Loads weights from an original D3 checkpoint."""
+        loaded_state = torch.load(checkpoint_path, map_location=self.device, weights_only=False)
+        state_dict = loaded_state.get('state_dict', loaded_state)
+
+        model_dict = self.score_model.state_dict()
+        filtered_dict = {}
+        for k, v in state_dict.items():
+            if k in model_dict and v.shape == model_dict[k].shape:
+                filtered_dict[k] = v
+        model_dict.update(filtered_dict)
+        self.score_model.load_state_dict(model_dict, strict=False)
+
+        if 'ema' in loaded_state and self.ema is not None:
+            self.ema.load_state_dict(loaded_state['ema'], device=self.device)
+
+        return loaded_state.get('step', 0)
+
+    def state_dict(self):
+        """Override to include EMA state in Lightning checkpoints."""
+        state = super().state_dict()
+        if hasattr(self, 'ema') and self.ema is not None:
+            ema_state = self.ema.state_dict()
+            for key, value in ema_state.items():
+                state[f'ema.{key}'] = value
+        return state
+
+    def load_state_dict(self, state_dict: dict, strict: bool = True):
+        """Override to handle both Lightning and original checkpoint formats."""
+        if 'model' in state_dict and 'ema' in state_dict and 'step' in state_dict:
+            step = self.load_from_original_checkpoint(state_dict)
+            return step
+        else:
+            model_state = {}
+            ema_state = {}
+
+            for key, value in state_dict.items():
+                if key.startswith('ema.'):
+                    ema_key = key.replace('ema.', '')
+                    ema_state[ema_key] = value
+                else:
+                    model_state[key] = value
+
+            result = super().load_state_dict(model_state, strict=False)
+
+            if ema_state and hasattr(self, 'ema') and self.ema is not None:
+                try:
+                    self.ema.load_state_dict(ema_state, device=self.device)
+                except Exception as e:
+                    print(f"Could not load EMA state: {e}")
+
+            return result
+
+
+class D3DataModule(pl.LightningDataModule):
+    """
+    Concrete DataModule that accepts pre-built datasets directly.
+
+    No subclassing needed -- just pass your PyTorch Datasets.
+    """
+
+    def __init__(self, cfg, train_dataset, val_dataset):
+        super().__init__()
+        self.cfg = cfg
+        self._train_ds = train_dataset
+        self._val_ds = val_dataset
+        self.train_ds = None
+        self.val_ds = None
+
+    def setup(self, stage: str = None):
+        self.train_ds = self._train_ds
+        self.val_ds = self._val_ds
+
+    def train_dataloader(self):
+        from torch.utils.data import DataLoader
+        return DataLoader(
+            self.train_ds,
+            batch_size=self.cfg.training.batch_size // (self.cfg.ngpus * self.cfg.training.accum),
+            num_workers=2,
+            pin_memory=True,
+            shuffle=True,
+            persistent_workers=True,
+        )
+
+    def val_dataloader(self):
+        from torch.utils.data import DataLoader
+        return DataLoader(
+            self.val_ds,
+            batch_size=self.cfg.eval.batch_size // (self.cfg.ngpus * self.cfg.training.accum),
+            num_workers=2,
+            pin_memory=True,
+            shuffle=False,
+        )
+
+
+class D3Trainer:
+    """
+    High-level trainer for D3 DNA Discrete Diffusion models.
+
+    Example::
+
+        trainer = D3Trainer('config.yaml')
+        trainer.fit(train_dataset, val_dataset)
+    """
+
+    def __init__(self, config, work_dir: Optional[str] = None):
+        if isinstance(config, (str, os.PathLike)):
+            config = load_config(str(config))
+        self.cfg = config
+        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        self.work_dir = work_dir or f"experiments/d3_run_{timestamp}"
+
+    def fit(self, train_dataset, val_dataset, resume_from: Optional[str] = None):
+        """
+        Train the model on the provided datasets.
+
+        Args:
+            train_dataset: PyTorch Dataset for training.
+            val_dataset: PyTorch Dataset for validation.
+            resume_from: Optional path to a checkpoint to resume from.
+        """
+        os.makedirs(self.work_dir, exist_ok=True)
+
+        lightning_module = D3LightningModule(self.cfg)
+        data_module = D3DataModule(self.cfg, train_dataset, val_dataset)
+        trainer = self._build_trainer()
+
+        ckpt_path = None
+        if resume_from and os.path.exists(resume_from):
+            ckpt_path = resume_from
+
+        trainer.fit(lightning_module, data_module, ckpt_path=ckpt_path)
+        print(f"Training completed. Results saved to: {self.work_dir}")
+        return trainer, lightning_module
+
+    def _build_trainer(self):
+        """Create PyTorch Lightning trainer."""
+        callbacks = self._setup_callbacks()
+        loggers = self._setup_logging()
+
+        trainer_args = {
+            'max_epochs': self.cfg.training.get('max_epochs', 300),
+            'log_every_n_steps': self.cfg.training.get('log_freq', 50),
+            'check_val_every_n_epoch': self.cfg.training.get('val_every_n_epochs', 4),
+            'accumulate_grad_batches': self.cfg.training.accum,
+            'precision': 'bf16-mixed',
+            'gradient_clip_val': self.cfg.optim.grad_clip if self.cfg.optim.grad_clip >= 0 else None,
+            'enable_checkpointing': True,
+            'enable_progress_bar': True,
+            'enable_model_summary': True,
+            'callbacks': callbacks,
+            'logger': loggers,
+        }
+
+        if self.cfg.ngpus > 1:
+            trainer_args.update({
+                'devices': self.cfg.ngpus,
+                'num_nodes': getattr(self.cfg, 'nnodes', 1),
+                'strategy': 'ddp_find_unused_parameters_true',
+                'sync_batchnorm': True,
+            })
+        else:
+            trainer_args['devices'] = 1
+
+        return pl.Trainer(**trainer_args)
+
+    def _setup_callbacks(self):
+        """Setup training callbacks."""
+        callbacks = []
+
+        checkpoint_callback = ModelCheckpoint(
+            dirpath=os.path.join(self.work_dir, "checkpoints"),
+            filename="model-{epoch:02d}-{val_loss:.4f}",
+            save_top_k=3,
+            monitor="val_loss",
+            mode="min",
+            save_last=True,
+            every_n_epochs=self.cfg.training.get('checkpoint_every_n_epochs', 10)
+        )
+        callbacks.append(checkpoint_callback)
+        callbacks.append(LearningRateMonitor(logging_interval='step'))
+
+        if hasattr(self.cfg.training, 'early_stopping_patience') and self.cfg.training.early_stopping_patience:
+            early_stop = EarlyStopping(
+                monitor='val_loss',
+                patience=self.cfg.training.early_stopping_patience,
+                mode='min'
+            )
+            callbacks.append(early_stop)
+
+        return callbacks
+
+    def _setup_logging(self):
+        """Setup logging configuration."""
+        loggers = []
+
+        tb_logger = TensorBoardLogger(
+            save_dir=self.work_dir,
+            name="lightning_logs",
+            version=None
+        )
+        loggers.append(tb_logger)
+
+        # Optional wandb logger
+        if hasattr(self.cfg, 'wandb') and self.cfg.wandb.get('enabled', False):
+            try:
+                from pytorch_lightning.loggers import WandbLogger
+                config_dict = OmegaConf.to_container(self.cfg, resolve=True)
+                wandb_logger = WandbLogger(
+                    project=self.cfg.wandb.get('project', 'd3-dna'),
+                    name=self.cfg.wandb.get('name', None),
+                    entity=self.cfg.wandb.get('entity', None),
+                    config=config_dict,
+                    save_dir=self.work_dir,
+                    id=self.cfg.wandb.get('id', None),
+                )
+                loggers.append(wandb_logger)
+            except ImportError:
+                print("wandb not installed. Install with: pip install d3-dna[logging]")
+
+        return loggers
+
+
+# Keep base classes available for users who need to subclass
+BaseD3LightningModule = D3LightningModule
+BaseD3DataModule = D3DataModule
