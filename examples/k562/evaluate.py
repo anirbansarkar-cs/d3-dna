@@ -60,7 +60,8 @@ x_test = torch.from_numpy(x_test_onehot).permute(0, 2, 1).float()
 
 # Load oracle
 from mpralegnet import LitModel
-oracle = LitModel.load_from_checkpoint(args.oracle).eval()
+from mpralegnet.config import get_default_config
+oracle = LitModel.load_from_checkpoint(args.oracle, tr_cfg=get_default_config()).eval()
 device = "cuda" if torch.cuda.is_available() else "cpu"
 oracle = oracle.to(device)
 
