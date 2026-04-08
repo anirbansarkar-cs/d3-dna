@@ -28,6 +28,7 @@ parser.add_argument("--steps", type=int, default=20, help="Number of sampling st
 parser.add_argument("--replicates", type=int, default=5, help="Number of sample replicates")
 parser.add_argument("--batch-size", type=int, default=None, help="Sequences per GPU batch (default: training batch_size from config)")
 parser.add_argument("--output-dir", type=str, default="generated", help="Output directory")
+parser.add_argument("--rep-offset", type=int, default=0, help="Starting replicate index (for parallel jobs)")
 args = parser.parse_args()
 
 cfg = OmegaConf.load("config.yaml")
@@ -53,7 +54,8 @@ device = "cuda" if torch.cuda.is_available() else "cpu"
 
 os.makedirs(args.output_dir, exist_ok=True)
 
-for rep in range(args.replicates):
+for rep_idx in range(args.replicates):
+    rep = rep_idx + args.rep_offset
     print(f"\n--- Replicate {rep} ---")
     N = len(labels)
     bs = args.batch_size if args.batch_size else cfg.training.batch_size

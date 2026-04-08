@@ -2,6 +2,8 @@
 
 A PyPI package for training and sampling discrete diffusion models on DNA sequences.
 
+This package provides a clean, reusable implementation of the D3 (DNA Discrete Diffusion) framework from [D3-DNA-Discrete-Diffusion](https://github.com/anirbansarkar-cs/D3-DNA-Discrete-Diffusion). The original repository contains the full research codebase, experiment scripts, and analysis pipelines. This package extracts the core model, training, and sampling components into a pip-installable library suitable for integration into new projects.
+
 ## Installation
 
 ```bash

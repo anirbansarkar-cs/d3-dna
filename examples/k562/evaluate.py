@@ -19,6 +19,9 @@ import sys
 import numpy as np
 import torch
 
+# Add mpralegnet to path for oracle loading
+sys.path.insert(0, os.path.expanduser("~/mpralegnet"))
+
 parser = argparse.ArgumentParser()
 parser.add_argument("--samples-dir", type=str, default="generated",
                     help="Directory containing sample_*.npz files")
