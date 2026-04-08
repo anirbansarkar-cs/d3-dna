@@ -26,6 +26,7 @@ parser = argparse.ArgumentParser()
 parser.add_argument("--checkpoint", type=str, default=None, help="Model checkpoint path")
 parser.add_argument("--steps", type=int, default=20, help="Number of sampling steps")
 parser.add_argument("--replicates", type=int, default=5, help="Number of sample replicates")
+parser.add_argument("--batch-size", type=int, default=None, help="Sequences per GPU batch (default: training batch_size from config)")
 parser.add_argument("--output-dir", type=str, default="generated", help="Output directory")
 args = parser.parse_args()
 
@@ -54,14 +55,22 @@ os.makedirs(args.output_dir, exist_ok=True)
 
 for rep in range(args.replicates):
     print(f"\n--- Replicate {rep} ---")
-    seqs = sampler.generate(
-        checkpoint=ckpt,
-        model=model,
-        num_samples=len(labels),
-        labels=labels,
-        steps=args.steps,
-        device=device,
-    )
+    N = len(labels)
+    bs = args.batch_size if args.batch_size else cfg.training.batch_size
+    all_seqs = []
+    for start in range(0, N, bs):
+        end = min(start + bs, N)
+        batch_labels = labels[start:end]
+        batch_seqs = sampler.generate(
+            checkpoint=ckpt,
+            model=model,
+            num_samples=end - start,
+            labels=batch_labels,
+            steps=args.steps,
+            device=device,
+        )
+        all_seqs.append(batch_seqs.cpu())
+    seqs = torch.cat(all_seqs, dim=0)
 
     # Save as one-hot NPZ (evaluation pipeline format)
     onehot = F.one_hot(seqs.long(), num_classes=4).float().numpy()  # (N, 230, 4)
@@ -72,6 +81,6 @@ for rep in range(args.replicates):
     fasta_path = os.path.join(args.output_dir, f"sample_{rep}.fasta")
     sampler.save(seqs, fasta_path, format="fasta")
 
-    print(f"Saved {npz_path} shape={onehot.shape}, {fasta_path}")
+    print(f"  Saved {npz_path} shape={onehot.shape}, {fasta_path}")
 
 print(f"\nDone. All replicates saved to {args.output_dir}/")
