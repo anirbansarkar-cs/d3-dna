@@ -18,11 +18,16 @@ echo "=== Sampling ==="
 python sample.py --steps 20 --replicates 5
 
 echo ""
-echo "=== Evaluation ==="
+echo "=== Evaluation (SP-MSE, built-in) ==="
 python evaluate.py \
     --data data/lenti_MPRA_K562_data.h5 \
-    --oracle data/oracle_best_model.ckpt \
-    --eval-pipeline /path/to/d3_evaluation_pipeline
+    --oracle data/oracle_best_model.ckpt
+
+# For full 5-metric evaluation, add --eval-pipeline:
+# python evaluate.py \
+#     --data data/lenti_MPRA_K562_data.h5 \
+#     --oracle data/oracle_best_model.ckpt \
+#     --eval-pipeline /path/to/d3_evaluation_pipeline
 
 echo ""
 echo "=== Done ==="
