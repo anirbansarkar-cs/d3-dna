@@ -10,7 +10,7 @@ This package provides a clean, reusable implementation of the D3 (DNA Discrete D
 # Core package
 pip install d3-dna
 
-# With flash attention (recommended for GPU)
+# With flash attention (faster training on long sequences)
 pip install d3-dna[flash]
 
 # With Weights & Biases logging
@@ -19,6 +19,8 @@ pip install d3-dna[logging]
 # Everything
 pip install d3-dna[all]
 ```
+
+**GPU acceleration**: `d3-dna[flash]` installs [flash attention](https://github.com/Dao-AILab/flash-attention) for faster, more memory-efficient training on long sequences. Without it, the package uses PyTorch's built-in scaled dot-product attention (SDPA) — same model quality, just slower for long inputs.
 
 ## Quickstart
 
