@@ -279,6 +279,17 @@ class D3Sampler:
             labels=label_tensor
         )
         sampler.save(sequences, 'output.fasta')
+
+    For large jobs, load the checkpoint once and generate in batches::
+
+        sampler = D3Sampler('config.yaml')
+        model = TransformerModel(cfg)
+        sampler.load(checkpoint='path/to/model.ckpt', model=model, device='cuda')
+        sequences = sampler.generate_batched(
+            num_samples=7000,
+            labels=label_tensor,
+            batch_size=64,
+        )
     """
 
     def __init__(self, config):
@@ -286,6 +297,42 @@ class D3Sampler:
             from d3_dna.io import load_config
             config = load_config(config)
         self.config = config
+        self._model = None
+        self._graph = None
+        self._noise = None
+        self._device = None
+
+    def load(
+        self,
+        checkpoint: str,
+        model: torch.nn.Module,
+        device: str = 'cuda',
+    ):
+        """
+        Load a checkpoint once for repeated generation calls.
+
+        Args:
+            checkpoint: Path to trained model checkpoint.
+            model: Model instance of the correct architecture.
+            device: Device to run on.
+        """
+        from d3_dna.io import load_checkpoint
+
+        print(f"Loading checkpoint: {checkpoint}")
+        self._model, self._graph, self._noise = load_checkpoint(
+            checkpoint, model, self.config, device
+        )
+        self._model.eval()
+        self._device = device
+
+    @property
+    def is_loaded(self):
+        return self._model is not None
+
+    def _ensure_loaded(self, checkpoint, model, device):
+        """Load checkpoint if not already loaded."""
+        if not self.is_loaded:
+            self.load(checkpoint, model, device)
 
     def generate(
         self,
@@ -299,44 +346,100 @@ class D3Sampler:
         """
         Generate sequences using the PC sampler.
 
+        Loads the checkpoint if not already loaded via :meth:`load`.
+
         Args:
             checkpoint: Path to trained model checkpoint.
             model: Model instance of the correct architecture (will be loaded from ckpt).
             num_samples: Number of sequences to generate.
-            labels: Optional conditioning labels, shape (num_samples, signal_dim).
+            labels: Optional conditioning labels, shape ``(num_samples, signal_dim)``
+                for global conditioning or ``(num_samples, seq_len, signal_dim)``
+                for per-position conditioning.
             steps: Sampling steps; defaults to config.sampling.steps.
             device: Device to run on.
 
         Returns:
             Integer token tensor of shape (num_samples, sequence_length).
         """
-        from d3_dna.io import load_checkpoint
-
-        print(f"Loading checkpoint: {checkpoint}")
-        model, graph, noise = load_checkpoint(checkpoint, model, self.config, device)
-        model.eval()
+        self._ensure_loaded(checkpoint, model, device)
 
         seq_len = self.config.dataset.sequence_length
         n_steps = steps if steps is not None else self.config.sampling.steps
-        print(f"Generating {num_samples} sequences (len={seq_len}, steps={n_steps}, device={device})")
 
         sampling_fn = get_pc_sampler(
-            graph=graph,
-            noise=noise,
+            graph=self._graph,
+            noise=self._noise,
             batch_dims=(num_samples, seq_len),
             predictor=self.config.sampling.predictor,
             steps=n_steps,
             denoise=self.config.sampling.noise_removal,
-            device=torch.device(device),
+            device=torch.device(self._device),
         )
 
         if labels is not None and not isinstance(labels, torch.Tensor):
-            labels = torch.tensor(labels, device=device)
+            labels = torch.tensor(labels, device=self._device)
         elif labels is not None:
-            labels = labels.to(device)
+            labels = labels.to(self._device)
 
-        sequences = sampling_fn(model, labels)
+        sequences = sampling_fn(self._model, labels)
         return sequences
+
+    def generate_batched(
+        self,
+        num_samples: int,
+        labels=None,
+        batch_size: int = 64,
+        steps: Optional[int] = None,
+    ) -> torch.Tensor:
+        """
+        Generate sequences in batches, loading the checkpoint only once.
+
+        Must call :meth:`load` first.
+
+        Args:
+            num_samples: Total number of sequences to generate.
+            labels: Optional conditioning labels for all samples.
+            batch_size: Number of sequences per GPU batch.
+            steps: Sampling steps; defaults to config.sampling.steps.
+
+        Returns:
+            Integer token tensor of shape (num_samples, sequence_length).
+        """
+        if not self.is_loaded:
+            raise RuntimeError("Call sampler.load(checkpoint, model, device) before generate_batched()")
+
+        seq_len = self.config.dataset.sequence_length
+        n_steps = steps if steps is not None else self.config.sampling.steps
+        device = torch.device(self._device)
+        print(f"Generating {num_samples} sequences in batches of {batch_size} (len={seq_len}, steps={n_steps})")
+
+        all_seqs = []
+        for start in range(0, num_samples, batch_size):
+            end = min(start + batch_size, num_samples)
+            bs = end - start
+
+            sampling_fn = get_pc_sampler(
+                graph=self._graph,
+                noise=self._noise,
+                batch_dims=(bs, seq_len),
+                predictor=self.config.sampling.predictor,
+                steps=n_steps,
+                denoise=self.config.sampling.noise_removal,
+                device=device,
+            )
+
+            batch_labels = None
+            if labels is not None:
+                batch_labels = labels[start:end]
+                if not isinstance(batch_labels, torch.Tensor):
+                    batch_labels = torch.tensor(batch_labels, device=device)
+                else:
+                    batch_labels = batch_labels.to(device)
+
+            batch_seqs = sampling_fn(self._model, batch_labels)
+            all_seqs.append(batch_seqs.cpu())
+
+        return torch.cat(all_seqs, dim=0)
 
     def save(self, sequences: torch.Tensor, path: str, format: str = 'fasta'):
         """

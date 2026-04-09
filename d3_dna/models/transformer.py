@@ -132,7 +132,12 @@ class EmbeddingLayer(nn.Module):
         vocab_embed = self.embedding[x]
         if y is not None:
             signal_embed = self.signal_embedding(y.to(torch.float32))
-            return torch.add(vocab_embed, signal_embed[:, None, :])
+            # Handle both global and per-position conditioning:
+            # Global: y is (batch, signal_dim) -> signal_embed is (batch, dim) -> unsqueeze to (batch, 1, dim)
+            # Per-position: y is (batch, seq_len, signal_dim) -> signal_embed is (batch, seq_len, dim) -> add directly
+            if signal_embed.dim() == 2:
+                signal_embed = signal_embed.unsqueeze(1)
+            return torch.add(vocab_embed, signal_embed)
         else:
             return vocab_embed
 
