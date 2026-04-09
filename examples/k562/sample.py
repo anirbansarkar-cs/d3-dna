@@ -1,7 +1,7 @@
 """
 Generate sequences from a trained K562 checkpoint.
 
-Produces 5 replicates of test-conditioned samples in both NPZ (one-hot) and FASTA formats.
+Produces replicates of test-conditioned samples in both NPZ (one-hot) and FASTA formats.
 
 Usage:
     python sample.py
@@ -51,28 +51,21 @@ print(f"Generating {args.replicates} replicates of {len(labels)} sequences ({arg
 model = TransformerModel(cfg)
 sampler = D3Sampler(cfg)
 device = "cuda" if torch.cuda.is_available() else "cpu"
+sampler.load(checkpoint=ckpt, model=model, device=device)
 
 os.makedirs(args.output_dir, exist_ok=True)
+bs = args.batch_size if args.batch_size else cfg.training.batch_size
 
 for rep_idx in range(args.replicates):
     rep = rep_idx + args.rep_offset
     print(f"\n--- Replicate {rep} ---")
-    N = len(labels)
-    bs = args.batch_size if args.batch_size else cfg.training.batch_size
-    all_seqs = []
-    for start in range(0, N, bs):
-        end = min(start + bs, N)
-        batch_labels = labels[start:end]
-        batch_seqs = sampler.generate(
-            checkpoint=ckpt,
-            model=model,
-            num_samples=end - start,
-            labels=batch_labels,
-            steps=args.steps,
-            device=device,
-        )
-        all_seqs.append(batch_seqs.cpu())
-    seqs = torch.cat(all_seqs, dim=0)
+
+    seqs = sampler.generate_batched(
+        num_samples=len(labels),
+        labels=labels,
+        batch_size=bs,
+        steps=args.steps,
+    )
 
     # Save as one-hot NPZ (evaluation pipeline format)
     onehot = F.one_hot(seqs.long(), num_classes=4).float().numpy()  # (N, 230, 4)

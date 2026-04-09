@@ -1,0 +1,93 @@
+# Promoter — D3 Transformer Configuration
+# Matches the architecture used to train the promoter checkpoint.
+#
+# KEY DIFFERENCE from K562/LentiMPRA configs:
+#   This model uses PER-POSITION conditioning (signal_dim: 1 applied at every
+#   base pair position), so labels have shape (batch, seq_len, signal_dim).
+#   K562/LentiMPRA use GLOBAL conditioning where labels have shape (batch, signal_dim)
+#   and are broadcast across all positions.
+#
+#   The EmbeddingLayer handles both cases automatically based on label tensor
+#   dimensionality (2D = global, 3D = per-position).
+
+dataset:
+  name: promoter
+  sequence_length: 1024
+  num_classes: 4
+  signal_dim: 1  # Per-position regulatory activity (1 value per base pair)
+
+ngpus: 1
+nnodes: 1
+tokens: 4  # DNA alphabet: A, C, G, T
+
+# Model — 12-block transformer (~30M params)
+model:
+  name: small
+  type: ddit
+  architecture: transformer
+  hidden_size: 768
+  cond_dim: 128
+  length: 1024
+  n_blocks: 12
+  n_heads: 12
+  scale_by_sigma: false
+  dropout: 0.1
+  class_dropout_prob: 0.1
+
+# Training (needed for EMA decay during checkpoint loading)
+training:
+  batch_size: 128
+  accum: 1
+  max_epochs: 300
+  checkpoint_every_n_epochs: 4
+  log_freq: 500
+  val_every_n_epochs: 4
+  weight: standard
+  snapshot_sampling: true
+  ema: 0.9999
+
+# Optimizer
+optim:
+  optimizer: AdamW
+  lr: 0.0003
+  beta1: 0.9
+  beta2: 0.999
+  eps: 1.0e-08
+  weight_decay: 0
+  warmup: 2500
+  grad_clip: 1.0
+
+# Diffusion process
+graph:
+  type: uniform
+  file: data
+  report_all: false
+
+noise:
+  type: geometric
+  sigma_min: 0.0001
+  sigma_max: 20
+
+# Sampling
+sampling:
+  predictor: euler
+  steps: 128
+  noise_removal: true
+
+# Evaluation
+eval:
+  batch_size: 512
+  perplexity: false
+  perplexity_batch_size: 32
+
+# Logging (disabled by default)
+wandb:
+  enabled: false
+  project: d3-promoter
+  name: promoter-transformer
+
+# Paths — update these to match your local setup
+paths:
+  data_file: /grid/koo/home/shared/d3/data/promoter/Promoter_data.npz
+  oracle_model: /grid/koo/home/shared/d3/data/oracle_weights/promoter/best.sei.model.pth.tar
+  sei_features: /grid/koo/home/shared/d3/data/oracle_weights/promoter/target.sei.names

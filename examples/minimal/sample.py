@@ -14,15 +14,15 @@ checkpoint_path = sorted(checkpoints)[-1]
 model = TransformerModel(cfg)
 
 sampler = D3Sampler(cfg)
-labels = torch.rand(10, 1)  # 10 sequences, 1D labels
+sampler.load(checkpoint=checkpoint_path, model=model,
+             device='cuda' if torch.cuda.is_available() else 'cpu')
 
-device = 'cuda' if torch.cuda.is_available() else 'cpu'
-sequences = sampler.generate(
-    checkpoint=checkpoint_path,
-    model=model,
+labels = torch.rand(10, 1)  # 10 sequences, 1D global labels
+
+sequences = sampler.generate_batched(
     num_samples=10,
     labels=labels,
-    device=device,
+    batch_size=10,
 )
 
 print(f"Generated {sequences.shape[0]} sequences of length {sequences.shape[1]}")
