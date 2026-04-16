@@ -1,16 +1,26 @@
 """
-D3-DNA Diffusion Process
+D3-DNA diffusion + sampling math.
 
-Merges noise schedules, graph/transition matrices, losses, and categorical sampling
-into a single module.
+Pure PyTorch (zero Lightning imports). Contains everything needed to define the
+forward diffusion process and to run reverse sampling:
+
+    * Categorical sampling utilities (``gumbel_softmax``, ``sample_categorical``)
+    * Noise schedules (``Noise``, ``GeometricNoise``, ``get_noise``)
+    * Graphs / transition matrices (``Graph``, ``Uniform``, ``Absorbing``,
+      ``Bridge``, ``get_graph``, ``bridge_interpolation_functions``)
+    * Score-model wrappers (``get_model_fn``, ``get_score_fn``)
+    * Predictors (``Predictor``, ``EulerPredictor``, ``NonePredictor``,
+      ``AnalyticPredictor``, ``EulerBridgePredictor``, ``TweedieBridgePredictor``,
+      ``register_predictor``, ``get_predictor``)
+    * Sampler factories (``Denoiser``, ``get_sampling_fn``, ``get_pc_sampler``,
+      ``get_guided_bridge_sampler``)
 """
 
 import abc
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import torch.optim as optim
-import numpy as np
+from tqdm import tqdm
 
 
 # =============================================================================
@@ -42,9 +52,8 @@ def get_noise(config):
 
 
 class Noise(abc.ABC, nn.Module):
-    """
-    Baseline forward method to get the total + rate of noise at a timestep.
-    """
+    """Baseline forward method to get the total + rate of noise at a timestep."""
+
     def forward(self, t):
         return self.total_noise(t), self.rate_noise(t)
 
@@ -78,9 +87,7 @@ class GeometricNoise(Noise, nn.Module):
 # =============================================================================
 
 def bridge_interpolation_functions(t, T=1.0):
-    """
-    Compute the bridge interpolation functions alpha(t), beta(t), gamma(t).
-    """
+    """Compute the bridge interpolation functions alpha(t), beta(t), gamma(t)."""
     t_norm = t / T
     alpha = (1 - t_norm) ** 2
     beta = t_norm ** 2
@@ -412,132 +419,294 @@ class Bridge(Graph):
 
 
 # =============================================================================
-# LOSSES AND OPTIMIZERS
+# SCORE-MODEL WRAPPERS
 # =============================================================================
 
-def get_loss_fn(noise, graph, train, sampling_eps=1e-3, lv=False, sc=False):
+def get_model_fn(model, train=False):
+    """Create a function to give the output of the score-based model."""
 
-    def loss_fn(model, batch, labels=None, cond=None, t=None, perturbed_batch=None):
-        from d3_dna.io import get_score_fn  # lazy import to avoid circular dependency
-
-        if t is None:
-            if lv:
-                raise NotImplementedError("Yeah I gotta do this later")
-            else:
-                t = (1 - sampling_eps) * torch.rand(batch.shape[0], device=batch.device) + sampling_eps
-
-        sigma, dsigma = noise(t)
-
-        if perturbed_batch is None:
-            perturbed_batch = graph.sample_transition(batch, sigma[:, None])
-
-        log_score_fn = get_score_fn(model, train=train, sampling=False)
-        log_score = log_score_fn(perturbed_batch, sigma, labels)
-
-        if sc:
-            curr_sigma, curr_dsigma = noise(t/2)
-            curr_score = log_score_fn(perturbed_batch, curr_sigma, labels)
-            t_dsigma = t/2 * curr_dsigma
-            rev_rate = t_dsigma[..., None, None] * graph.reverse_rate(perturbed_batch, curr_score)
-            x = graph.sample_rate(perturbed_batch, rev_rate)
-
-            sampling_eps_tensor = torch.tensor(sampling_eps, device=batch.device)
-            next_sigma, next_dsigma = noise(sampling_eps_tensor)
-            next_score = log_score_fn(x, next_sigma, labels)
-            t_dsigma_next = sampling_eps_tensor * next_dsigma
-            rev_rate_next = t_dsigma_next[..., None, None] * graph.reverse_rate(x, next_score)
-
-            x_next = graph.sample_rate(x, rev_rate_next)
-            l2_loss = ((batch - x_next)**2)
-            mask = torch.rand(batch.shape[0], device=batch.device) < 0.25
-            expanded_mask = mask.unsqueeze(-1).expand_as(l2_loss)
-            loss = graph.score_entropy(log_score, sigma[:, None], perturbed_batch, batch)
-            loss = (dsigma[:, None] * loss)
-            main_loss = loss.clone()
-            main_loss[expanded_mask] = loss[expanded_mask] + l2_loss[expanded_mask]
-            final_loss = main_loss.sum(dim=-1)
-            return final_loss
-        else:
-            loss = graph.score_entropy(log_score, sigma[:, None], perturbed_batch, batch)
-            loss = (dsigma[:, None] * loss).sum(dim=-1)
-            return loss
-
-    return loss_fn
-
-
-def get_optimizer(config, params):
-    if config.optim.optimizer == 'Adam':
-        optimizer = optim.Adam(params, lr=config.optim.lr, betas=(config.optim.beta1, config.optim.beta2), eps=config.optim.eps,
-                               weight_decay=config.optim.weight_decay)
-    elif config.optim.optimizer == 'AdamW':
-        optimizer = optim.AdamW(params, lr=config.optim.lr, betas=(config.optim.beta1, config.optim.beta2), eps=config.optim.eps,
-                               weight_decay=config.optim.weight_decay)
-    else:
-        raise NotImplementedError(
-            f'Optimizer {config.optim.optimizer} not supported yet!')
-
-    return optimizer
-
-
-def optimization_manager(config):
-    """Returns an optimize_fn based on `config`."""
-
-    def optimize_fn(optimizer, scaler, params, step,
-                    lr=config.optim.lr, warmup=config.optim.warmup,
-                    grad_clip=config.optim.grad_clip):
-        scaler.unscale_(optimizer)
-
-        if warmup > 0:
-            for g in optimizer.param_groups:
-                g['lr'] = lr * np.minimum(step / warmup, 1.0)
-        if grad_clip >= 0:
-            torch.nn.utils.clip_grad_norm_(params, max_norm=grad_clip)
-
-        scaler.step(optimizer)
-        scaler.update()
-
-    return optimize_fn
-
-
-def get_step_fn(noise, graph, train, optimize_fn, accum):
-    loss_fn = get_loss_fn(noise, graph, train)
-
-    accum_iter = 0
-    total_loss = 0
-
-    def step_fn(state, batch, labels=None, cond=None):
-        nonlocal accum_iter
-        nonlocal total_loss
-
-        model = state['model']
-
+    def model_fn(x, sigma, labels=None):
         if train:
-            optimizer = state['optimizer']
-            scaler = state['scaler']
-            loss = loss_fn(model, batch, labels, cond=cond).mean() / accum
-
-            scaler.scale(loss).backward()
-
-            accum_iter += 1
-            total_loss += loss.detach()
-            if accum_iter == accum:
-                accum_iter = 0
-
-                state['step'] += 1
-                optimize_fn(optimizer, scaler, model.parameters(), step=state['step'])
-                state['ema'].update(model.parameters())
-                optimizer.zero_grad()
-
-                loss = total_loss
-                total_loss = 0
+            model.train()
         else:
-            with torch.no_grad():
-                ema = state['ema']
-                ema.store(model.parameters())
-                ema.copy_to(model.parameters())
-                loss = loss_fn(model, batch, labels, cond=cond).mean()
-                ema.restore(model.parameters())
+            model.eval()
+        return model(x, labels, train, sigma)
 
-        return loss
+    return model_fn
 
-    return step_fn
+
+def get_score_fn(model, train=False, sampling=False):
+    """Create a score function wrapper around the model."""
+    if sampling:
+        assert not train, "Must sample in eval mode"
+    model_fn = get_model_fn(model, train=train)
+
+    def score_fn(x, sigma, labels=None):
+        device_type = 'cuda' if x.is_cuda else 'cpu'
+        with torch.amp.autocast(device_type, dtype=torch.float16, enabled=(device_type == 'cuda')):
+            sigma = sigma.reshape(-1)
+            model_output = model_fn(x, sigma, labels)
+            if isinstance(model_output, tuple):
+                score, _ = model_output
+            else:
+                score = model_output
+
+            if sampling:
+                return score.exp()
+
+            return score
+
+    return score_fn
+
+
+# =============================================================================
+# PREDICTORS
+# =============================================================================
+
+_PREDICTORS = {}
+
+
+def register_predictor(cls=None, *, name=None):
+    """A decorator for registering predictor classes."""
+
+    def _register(cls):
+        if name is None:
+            local_name = cls.__name__
+        else:
+            local_name = name
+        if local_name in _PREDICTORS:
+            raise ValueError(
+                f'Already registered model with name: {local_name}')
+        _PREDICTORS[local_name] = cls
+        return cls
+
+    if cls is None:
+        return _register
+    else:
+        return _register(cls)
+
+
+def get_predictor(name):
+    return _PREDICTORS[name]
+
+
+class Predictor(abc.ABC):
+    """The abstract class for a predictor algorithm."""
+
+    def __init__(self, graph, noise):
+        super().__init__()
+        self.graph = graph
+        self.noise = noise
+
+    @abc.abstractmethod
+    def update_fn(self, score_fn, x, labels, t, step_size):
+        pass
+
+
+@register_predictor(name="euler")
+class EulerPredictor(Predictor):
+    def update_fn(self, score_fn, x, labels, t, step_size):
+        sigma, dsigma = self.noise(t)
+        score = score_fn(x, sigma, labels)
+
+        rev_rate = step_size * dsigma[..., None] * self.graph.reverse_rate(x, score)
+        x = self.graph.sample_rate(x, rev_rate)
+        return x
+
+
+@register_predictor(name="none")
+class NonePredictor(Predictor):
+    def update_fn(self, score_fn, x, labels, t, step_size):
+        return x
+
+
+@register_predictor(name="analytic")
+class AnalyticPredictor(Predictor):
+    def update_fn(self, score_fn, x, labels, t, step_size):
+        curr_sigma = self.noise(t)[0]
+        next_sigma = self.noise(t - step_size)[0]
+        dsigma = curr_sigma - next_sigma
+
+        score = score_fn(x, curr_sigma, labels)
+
+        stag_score = self.graph.staggered_score(score, dsigma)
+        probs = stag_score * self.graph.transp_transition(x, dsigma)
+        return sample_categorical(probs)
+
+
+@register_predictor(name="euler_bridge")
+class EulerBridgePredictor:
+    """Predictor for SE-DDB using Euler tau-leaping."""
+
+    def __init__(self, R_fn):
+        self.R_fn = R_fn
+
+    def update_fn(self, score_fn, x, t, dt):
+        guided_scores = score_fn(x, t)
+        current_tokens_one_hot = F.one_hot(x, num_classes=guided_scores.shape[-1])
+        base_rate = self.R_fn(x, t)
+        transition_probs = current_tokens_one_hot + dt * base_rate * guided_scores
+        transition_probs = torch.clamp(transition_probs, min=0)
+        renorm_factor = transition_probs.sum(dim=-1, keepdim=True)
+        transition_probs = transition_probs / renorm_factor.clamp(min=1e-9)
+        B, L, V = transition_probs.shape
+        return sample_categorical(transition_probs.view(B * L, V)).view(B, L)
+
+
+@register_predictor(name="tweedie_bridge")
+class TweedieBridgePredictor:
+    """Predictor for SE-DDB using Tweedie tau-leaping."""
+
+    def __init__(self, Q, noise_schedule):
+        self.Q = Q
+        self.noise_schedule = noise_schedule
+
+    def update_fn(self, score_fn, x, t, dt):
+        guided_scores = score_fn(x, t)
+        s_curr = self.noise_schedule.total_noise(t.squeeze())
+        s_prev = self.noise_schedule.total_noise((t - dt).squeeze())
+        sigma_delta = s_curr - s_prev
+        sigma_delta = sigma_delta.view(-1, 1, 1, 1)
+
+        Q_device = self.Q.to(device=x.device, dtype=guided_scores.dtype)
+        sigma_delta = sigma_delta.to(dtype=guided_scores.dtype)
+
+        mat_forward = torch.matrix_exp(-sigma_delta * Q_device)
+        mat_reverse = torch.matrix_exp(sigma_delta * Q_device)
+
+        guided_scores_r = guided_scores.unsqueeze(-1)
+        corrected_scores = torch.matmul(mat_forward, guided_scores_r)
+
+        current_token_one_hot = F.one_hot(x, num_classes=Q_device.shape[0]).to(dtype=guided_scores.dtype)
+        denoising_engine = torch.matmul(current_token_one_hot.unsqueeze(2), mat_reverse).squeeze(2)
+
+        transition_probs = corrected_scores.squeeze(-1) * denoising_engine
+        transition_probs = torch.clamp(transition_probs, min=0)
+        renorm_factor = transition_probs.sum(dim=-1, keepdim=True)
+        transition_probs = transition_probs / renorm_factor.clamp(min=1e-9)
+
+        B, L, V = transition_probs.shape
+        return sample_categorical(transition_probs.view(B * L, V)).view(B, L)
+
+
+class Denoiser:
+    def __init__(self, graph, noise):
+        self.graph = graph
+        self.noise = noise
+
+    def update_fn(self, score_fn, x, labels, t):
+        sigma = self.noise(t)[0]
+
+        score = score_fn(x, sigma, labels)
+        stag_score = self.graph.staggered_score(score, sigma)
+        probs = stag_score * self.graph.transp_transition(x, sigma)
+        if self.graph.absorb:
+            probs = probs[..., :-1]
+
+        return sample_categorical(probs)
+
+
+# =============================================================================
+# SAMPLER FACTORIES
+# =============================================================================
+
+def get_sampling_fn(config, graph, noise, batch_dims, eps, device, viz_logger=None):
+    sampling_fn = get_pc_sampler(graph=graph,
+                                 noise=noise,
+                                 batch_dims=batch_dims,
+                                 predictor=config.sampling.predictor,
+                                 steps=config.sampling.steps,
+                                 denoise=config.sampling.noise_removal,
+                                 eps=eps,
+                                 device=device,
+                                 viz_logger=viz_logger)
+    return sampling_fn
+
+
+def get_pc_sampler(graph, noise, batch_dims, predictor, steps, denoise=True, eps=1e-5, device=torch.device('cpu'), proj_fun=lambda x: x, viz_logger=None):
+    predictor = get_predictor(predictor)(graph, noise)
+    projector = proj_fun
+    denoiser = Denoiser(graph, noise)
+
+    @torch.no_grad()
+    def pc_sampler(model, labels):
+        sampling_score_fn = get_score_fn(model, train=False, sampling=True)
+
+        x = graph.sample_limit(*batch_dims).to(device)
+
+        timesteps = torch.linspace(1, eps, steps + 1, device=device)
+        dt = (1 - eps) / steps
+
+        for i in tqdm(range(steps), desc="Sampling", unit="step"):
+            t = timesteps[i] * torch.ones(x.shape[0], 1, device=device)
+            x = projector(x)
+
+            x = predictor.update_fn(sampling_score_fn, x, labels, t, dt)
+
+        if denoise:
+            x = projector(x)
+            t = timesteps[-1] * torch.ones(x.shape[0], 1, device=device)
+            x = denoiser.update_fn(sampling_score_fn, x, labels, t)
+
+        return x
+
+    return pc_sampler
+
+
+def get_guided_bridge_sampler(
+    predictor_name="euler_bridge",
+    steps=128,
+    device='cuda',
+    graph=None,
+    noise=None,
+    Q=None,
+    eps=1e-5,
+    viz_logger=None
+):
+    """Creates a sampling function for the guided discrete diffusion bridge."""
+    if predictor_name == "euler_bridge":
+        def uniform_R_fn(x, t):
+            return 1.0
+        pred = EulerBridgePredictor(R_fn=uniform_R_fn)
+    elif predictor_name == "tweedie_bridge":
+        if Q is None and hasattr(graph, 'Q_matrix'):
+            Q = graph.Q_matrix.to(device)
+        elif Q is None:
+            vocab_size = graph.dim
+            Q = torch.ones(vocab_size, vocab_size, device=device) / vocab_size
+            Q.fill_diagonal_(0)
+            for i in range(vocab_size):
+                Q[i, i] = -(vocab_size - 1) / vocab_size
+        else:
+            Q = Q.to(device)
+        pred = TweedieBridgePredictor(Q=Q, noise_schedule=noise)
+    else:
+        raise ValueError(f"Predictor {predictor_name} not recognized.")
+
+    @torch.no_grad()
+    def guided_sampler(model, start_sequence_xT, target_label):
+        x_t = start_sequence_xT.to(device)
+        B, L = x_t.shape
+
+        if isinstance(target_label, (int, float)):
+            labels = torch.tensor([target_label] * B, device=device, dtype=torch.long)
+        else:
+            labels = target_label.to(device)
+
+        timesteps = torch.linspace(1.0, eps, steps + 1, device=device)
+        dt = (1.0 - eps) / steps
+
+        for i in range(steps):
+            t = timesteps[i] * torch.ones(B, device=device)
+
+            def score_fn(x_current, time_current):
+                paired_input = torch.stack([x_current, start_sequence_xT.to(device)], dim=1)
+                sampling_score_fn = get_score_fn(model, train=False, sampling=True)
+                scores = sampling_score_fn(paired_input, time_current, labels)
+                return scores
+
+            x_t = pred.update_fn(score_fn, x_t, t, dt)
+
+        return x_t
+
+    return guided_sampler

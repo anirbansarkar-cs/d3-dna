@@ -63,13 +63,7 @@ python evaluate.py \
 
 ### Oracle dependency
 
-The evaluation script requires the [mpralegnet](https://github.com/anirbansarkar-cs/D3-DNA-Discrete-Diffusion) LegNet oracle package to be installed or available on `PYTHONPATH`:
-
-```bash
-export PYTHONPATH="/path/to/mpralegnet:$PYTHONPATH"
-```
-
-This is needed for both the built-in SP-MSE computation and the external evaluation pipeline.
+The LegNet oracle architecture is vendored in `oracle.py` (no external package required). The built-in SP-MSE evaluation only needs the oracle checkpoint (`--oracle`) and optional LegNet config (`--oracle-config`, defaults to the shared path). The external 5-metric pipeline still requires its own install at the path passed via `--eval-pipeline`.
 
 ## Metrics
 

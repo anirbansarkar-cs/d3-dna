@@ -1,16 +1,24 @@
 """
-D3-DNA Training
+D3-DNA training.
 
-Provides D3LightningModule, D3DataModule, BaseTrainer, and the high-level D3Trainer.
+Provides:
+    D3LightningModule  -- PL LightningModule wrapping the score model + EMA + loss
+    D3DataModule       -- PL LightningDataModule that accepts pre-built datasets
+    D3Trainer          -- high-level orchestrator that builds a pl.Trainer
+
+Training-mechanic factories (loss fn, optimizer, step fn) are co-located here
+because they are called exclusively from D3LightningModule. They are not
+"losses" in the evaluation-metric sense — see d3_dna/evals/metrics.py for that.
 """
 
 import os
 import datetime
-from typing import Any, Dict, Optional, Tuple
 from itertools import chain
+from typing import Optional
 
+import numpy as np
 import torch
-import torch.nn.functional as F
+import torch.optim as optim
 import pytorch_lightning as pl
 from pytorch_lightning.callbacks import ModelCheckpoint, LearningRateMonitor, EarlyStopping
 from pytorch_lightning.loggers import TensorBoardLogger
@@ -20,17 +28,152 @@ torch.set_float32_matmul_precision('medium')
 
 from d3_dna.models.ema import ExponentialMovingAverage
 from d3_dna.models import TransformerModel, ConvolutionalModel
-from d3_dna.diffusion import get_loss_fn, get_optimizer, get_graph, get_noise
-from d3_dna.io import get_score_fn, get_logger, load_config
+from d3_dna.models.diffusion import get_graph, get_noise, get_score_fn
+from d3_dna.modules.checkpoint import load_config
 
+
+# =============================================================================
+# TRAINING-MECHANIC FACTORIES
+# =============================================================================
+
+def get_loss_fn(noise, graph, train, sampling_eps=1e-3, lv=False, sc=False):
+    """Build the diffusion training-loss closure."""
+
+    def loss_fn(model, batch, labels=None, cond=None, t=None, perturbed_batch=None):
+        if t is None:
+            if lv:
+                raise NotImplementedError("Yeah I gotta do this later")
+            else:
+                t = (1 - sampling_eps) * torch.rand(batch.shape[0], device=batch.device) + sampling_eps
+
+        sigma, dsigma = noise(t)
+
+        if perturbed_batch is None:
+            perturbed_batch = graph.sample_transition(batch, sigma[:, None])
+
+        log_score_fn = get_score_fn(model, train=train, sampling=False)
+        log_score = log_score_fn(perturbed_batch, sigma, labels)
+
+        if sc:
+            curr_sigma, curr_dsigma = noise(t / 2)
+            curr_score = log_score_fn(perturbed_batch, curr_sigma, labels)
+            t_dsigma = t / 2 * curr_dsigma
+            rev_rate = t_dsigma[..., None, None] * graph.reverse_rate(perturbed_batch, curr_score)
+            x = graph.sample_rate(perturbed_batch, rev_rate)
+
+            sampling_eps_tensor = torch.tensor(sampling_eps, device=batch.device)
+            next_sigma, next_dsigma = noise(sampling_eps_tensor)
+            next_score = log_score_fn(x, next_sigma, labels)
+            t_dsigma_next = sampling_eps_tensor * next_dsigma
+            rev_rate_next = t_dsigma_next[..., None, None] * graph.reverse_rate(x, next_score)
+
+            x_next = graph.sample_rate(x, rev_rate_next)
+            l2_loss = ((batch - x_next) ** 2)
+            mask = torch.rand(batch.shape[0], device=batch.device) < 0.25
+            expanded_mask = mask.unsqueeze(-1).expand_as(l2_loss)
+            loss = graph.score_entropy(log_score, sigma[:, None], perturbed_batch, batch)
+            loss = (dsigma[:, None] * loss)
+            main_loss = loss.clone()
+            main_loss[expanded_mask] = loss[expanded_mask] + l2_loss[expanded_mask]
+            final_loss = main_loss.sum(dim=-1)
+            return final_loss
+        else:
+            loss = graph.score_entropy(log_score, sigma[:, None], perturbed_batch, batch)
+            loss = (dsigma[:, None] * loss).sum(dim=-1)
+            return loss
+
+    return loss_fn
+
+
+def get_optimizer(config, params):
+    if config.optim.optimizer == 'Adam':
+        optimizer = optim.Adam(params, lr=config.optim.lr, betas=(config.optim.beta1, config.optim.beta2),
+                               eps=config.optim.eps, weight_decay=config.optim.weight_decay)
+    elif config.optim.optimizer == 'AdamW':
+        optimizer = optim.AdamW(params, lr=config.optim.lr, betas=(config.optim.beta1, config.optim.beta2),
+                                eps=config.optim.eps, weight_decay=config.optim.weight_decay)
+    else:
+        raise NotImplementedError(f'Optimizer {config.optim.optimizer} not supported yet!')
+
+    return optimizer
+
+
+def optimization_manager(config):
+    """Returns an optimize_fn based on `config` (lr warmup + grad clip)."""
+
+    def optimize_fn(optimizer, scaler, params, step,
+                    lr=config.optim.lr, warmup=config.optim.warmup,
+                    grad_clip=config.optim.grad_clip):
+        scaler.unscale_(optimizer)
+
+        if warmup > 0:
+            for g in optimizer.param_groups:
+                g['lr'] = lr * np.minimum(step / warmup, 1.0)
+        if grad_clip >= 0:
+            torch.nn.utils.clip_grad_norm_(params, max_norm=grad_clip)
+
+        scaler.step(optimizer)
+        scaler.update()
+
+    return optimize_fn
+
+
+def get_step_fn(noise, graph, train, optimize_fn, accum):
+    """Training step with gradient accumulation + EMA update."""
+    loss_fn = get_loss_fn(noise, graph, train)
+
+    accum_iter = 0
+    total_loss = 0
+
+    def step_fn(state, batch, labels=None, cond=None):
+        nonlocal accum_iter
+        nonlocal total_loss
+
+        model = state['model']
+
+        if train:
+            optimizer = state['optimizer']
+            scaler = state['scaler']
+            loss = loss_fn(model, batch, labels, cond=cond).mean() / accum
+
+            scaler.scale(loss).backward()
+
+            accum_iter += 1
+            total_loss += loss.detach()
+            if accum_iter == accum:
+                accum_iter = 0
+
+                state['step'] += 1
+                optimize_fn(optimizer, scaler, model.parameters(), step=state['step'])
+                state['ema'].update(model.parameters())
+                optimizer.zero_grad()
+
+                loss = total_loss
+                total_loss = 0
+        else:
+            with torch.no_grad():
+                ema = state['ema']
+                ema.store(model.parameters())
+                ema.copy_to(model.parameters())
+                loss = loss_fn(model, batch, labels, cond=cond).mean()
+                ema.restore(model.parameters())
+
+        return loss
+
+    return step_fn
+
+
+# =============================================================================
+# LIGHTNING MODULES
+# =============================================================================
 
 class D3LightningModule(pl.LightningModule):
     """
     PyTorch Lightning module for D3 DNA Discrete Diffusion.
 
-    Config-driven: creates the model from config.model.architecture
-    without requiring subclassing. For custom architectures, subclass
-    and override create_model().
+    Config-driven: creates the model from config.model.architecture without
+    requiring subclassing. For custom architectures, subclass and override
+    create_model().
     """
 
     def __init__(self, cfg, dataset_name: Optional[str] = None):
@@ -50,11 +193,6 @@ class D3LightningModule(pl.LightningModule):
         self.total_loss = 0
 
     def create_model(self):
-        """
-        Create the score model from config.
-
-        Override this to use a custom architecture.
-        """
         arch = self.cfg.model.architecture
         if arch == 'transformer':
             return TransformerModel(self.cfg)
@@ -68,7 +206,6 @@ class D3LightningModule(pl.LightningModule):
             )
 
     def setup_ema(self):
-        """Setup EMA after model is created."""
         if self.score_model is not None:
             self.ema = ExponentialMovingAverage(
                 self.score_model.parameters(),
@@ -76,7 +213,6 @@ class D3LightningModule(pl.LightningModule):
             )
 
     def setup(self, stage: str = None):
-        """Setup method called after the model is moved to device."""
         if self.score_model is None:
             self.score_model = self.create_model()
             self.setup_ema()
@@ -93,7 +229,6 @@ class D3LightningModule(pl.LightningModule):
         )
 
     def process_batch(self, batch):
-        """Process batch data into inputs and targets."""
         if isinstance(batch, (list, tuple)) and len(batch) == 2:
             inputs, target = batch
             return inputs, target
@@ -101,7 +236,6 @@ class D3LightningModule(pl.LightningModule):
             return batch, None
 
     def training_step(self, batch, batch_idx):
-        """Training step with gradient accumulation support."""
         inputs, target = self.process_batch(batch)
 
         if target is not None:
@@ -126,7 +260,6 @@ class D3LightningModule(pl.LightningModule):
         return loss
 
     def validation_step(self, batch, batch_idx):
-        """Validation step using EMA weights."""
         inputs, target = self.process_batch(batch)
 
         if self.ema is not None:
@@ -150,7 +283,6 @@ class D3LightningModule(pl.LightningModule):
         return loss
 
     def configure_optimizers(self):
-        """Configure optimizer and scheduler."""
         params = chain(self.score_model.parameters(), self.noise.parameters())
         optimizer = get_optimizer(self.cfg, params)
 
@@ -173,7 +305,6 @@ class D3LightningModule(pl.LightningModule):
         return optimizer
 
     def on_before_optimizer_step(self, optimizer):
-        """Gradient clipping before optimizer step."""
         if self.cfg.optim.grad_clip >= 0:
             self.clip_gradients(
                 optimizer,
@@ -182,7 +313,6 @@ class D3LightningModule(pl.LightningModule):
             )
 
     def load_from_original_checkpoint(self, checkpoint_path: str):
-        """Loads weights from an original D3 checkpoint."""
         loaded_state = torch.load(checkpoint_path, map_location=self.device, weights_only=False)
         state_dict = loaded_state.get('state_dict', loaded_state)
 
@@ -200,7 +330,6 @@ class D3LightningModule(pl.LightningModule):
         return loaded_state.get('step', 0)
 
     def state_dict(self):
-        """Override to include EMA state in Lightning checkpoints."""
         state = super().state_dict()
         if hasattr(self, 'ema') and self.ema is not None:
             ema_state = self.ema.state_dict()
@@ -209,7 +338,6 @@ class D3LightningModule(pl.LightningModule):
         return state
 
     def load_state_dict(self, state_dict: dict, strict: bool = True):
-        """Override to handle both Lightning and original checkpoint formats."""
         if 'model' in state_dict and 'ema' in state_dict and 'step' in state_dict:
             step = self.load_from_original_checkpoint(state_dict)
             return step
@@ -236,11 +364,7 @@ class D3LightningModule(pl.LightningModule):
 
 
 class D3DataModule(pl.LightningDataModule):
-    """
-    Concrete DataModule that accepts pre-built datasets directly.
-
-    No subclassing needed -- just pass your PyTorch Datasets.
-    """
+    """Concrete DataModule that accepts pre-built datasets directly."""
 
     def __init__(self, cfg, train_dataset, val_dataset):
         super().__init__()
@@ -276,6 +400,10 @@ class D3DataModule(pl.LightningDataModule):
         )
 
 
+# =============================================================================
+# HIGH-LEVEL TRAINER
+# =============================================================================
+
 class D3Trainer:
     """
     High-level trainer for D3 DNA Discrete Diffusion models.
@@ -294,14 +422,6 @@ class D3Trainer:
         self.work_dir = work_dir or f"experiments/d3_run_{timestamp}"
 
     def fit(self, train_dataset, val_dataset, resume_from: Optional[str] = None):
-        """
-        Train the model on the provided datasets.
-
-        Args:
-            train_dataset: PyTorch Dataset for training.
-            val_dataset: PyTorch Dataset for validation.
-            resume_from: Optional path to a checkpoint to resume from.
-        """
         os.makedirs(self.work_dir, exist_ok=True)
 
         lightning_module = D3LightningModule(self.cfg)
@@ -317,7 +437,6 @@ class D3Trainer:
         return trainer, lightning_module
 
     def _build_trainer(self):
-        """Create PyTorch Lightning trainer."""
         callbacks = self._setup_callbacks()
         loggers = self._setup_logging()
 
@@ -348,7 +467,6 @@ class D3Trainer:
         return pl.Trainer(**trainer_args)
 
     def _setup_callbacks(self):
-        """Setup training callbacks."""
         callbacks = []
 
         checkpoint_callback = ModelCheckpoint(
@@ -374,7 +492,6 @@ class D3Trainer:
         return callbacks
 
     def _setup_logging(self):
-        """Setup logging configuration."""
         loggers = []
 
         tb_logger = TensorBoardLogger(
@@ -384,7 +501,6 @@ class D3Trainer:
         )
         loggers.append(tb_logger)
 
-        # Optional wandb logger
         if hasattr(self.cfg, 'wandb') and self.cfg.wandb.get('enabled', False):
             try:
                 from pytorch_lightning.loggers import WandbLogger
@@ -404,6 +520,6 @@ class D3Trainer:
         return loggers
 
 
-# Keep base classes available for users who need to subclass
+# Back-compat aliases for subclassing
 BaseD3LightningModule = D3LightningModule
 BaseD3DataModule = D3DataModule
