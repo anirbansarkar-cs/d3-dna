@@ -438,6 +438,7 @@ class D3Trainer:
         return trainer, lightning_module
 
     def _build_trainer(self):
+        callbacks = self._setup_callbacks()
         loggers = self._setup_logging()
         callbacks = self._setup_callbacks(has_logger=bool(loggers))
 
@@ -471,7 +472,7 @@ class D3Trainer:
 
         return pl.Trainer(**trainer_args)
 
-    def _setup_callbacks(self, has_logger=True):
+    def _setup_callbacks(self):
         callbacks = []
 
         checkpoint_callback = ModelCheckpoint(
