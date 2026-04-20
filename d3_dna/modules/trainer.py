@@ -414,11 +414,10 @@ class D3Trainer:
         trainer.fit(train_dataset, val_dataset)
     """
 
-    def __init__(self, config, work_dir: Optional[str] = None, callbacks=None):
+    def __init__(self, config, work_dir: Optional[str] = None):
         if isinstance(config, (str, os.PathLike)):
             config = load_config(str(config))
         self.cfg = config
-        self.extra_callbacks = callbacks or []
         timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
         self.work_dir = work_dir or f"experiments/d3_run_{timestamp}"
 
@@ -438,8 +437,8 @@ class D3Trainer:
         return trainer, lightning_module
 
     def _build_trainer(self):
+        callbacks = self._setup_callbacks()
         loggers = self._setup_logging()
-        callbacks = self._setup_callbacks(has_logger=bool(loggers))
 
         trainer_args = {
             'max_epochs': self.cfg.training.get('max_epochs', 300),
@@ -471,7 +470,7 @@ class D3Trainer:
 
         return pl.Trainer(**trainer_args)
 
-    def _setup_callbacks(self, has_logger=True):
+    def _setup_callbacks(self):
         callbacks = []
 
         checkpoint_callback = ModelCheckpoint(
@@ -484,8 +483,7 @@ class D3Trainer:
             every_n_epochs=self.cfg.training.get('checkpoint_every_n_epochs', 10)
         )
         callbacks.append(checkpoint_callback)
-        if has_logger:
-            callbacks.append(LearningRateMonitor(logging_interval='step'))
+        callbacks.append(LearningRateMonitor(logging_interval='step'))
 
         if hasattr(self.cfg.training, 'early_stopping_patience') and self.cfg.training.early_stopping_patience:
             early_stop = EarlyStopping(
@@ -495,21 +493,17 @@ class D3Trainer:
             )
             callbacks.append(early_stop)
 
-        callbacks.extend(self.extra_callbacks)
         return callbacks
 
     def _setup_logging(self):
         loggers = []
 
-        try:
-            tb_logger = TensorBoardLogger(
-                save_dir=self.work_dir,
-                name="lightning_logs",
-                version=None
-            )
-            loggers.append(tb_logger)
-        except (ImportError, ModuleNotFoundError):
-            print("tensorboard not installed, skipping TensorBoard logging.")
+        tb_logger = TensorBoardLogger(
+            save_dir=self.work_dir,
+            name="lightning_logs",
+            version=None
+        )
+        loggers.append(tb_logger)
 
         if hasattr(self.cfg, 'wandb') and self.cfg.wandb.get('enabled', False):
             try:
