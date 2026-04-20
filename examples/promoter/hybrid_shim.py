@@ -110,13 +110,14 @@ class HybridSEDD(nn.Module):
         c = F.silu(self.sigma_map(sigma))
         rotary_cos_sin = self.rotary_emb(x)
 
+        # Matches TransformerModel.forward: no inner autocast. The outer
+        # get_score_fn autocast is the single precision-control point.
         rep = None
-        with torch.amp.autocast('cuda', dtype=torch.bfloat16):
-            for i, block in enumerate(self.blocks):
-                x = block(x, rotary_cos_sin, c, seqlens=None)
-                if layer_idx is not None and i == layer_idx:
-                    rep = x
-            x = self.output_layer(x, c)
+        for i, block in enumerate(self.blocks):
+            x = block(x, rotary_cos_sin, c, seqlens=None)
+            if layer_idx is not None and i == layer_idx:
+                rep = x
+        x = self.output_layer(x, c)
 
         x = torch.scatter(x, -1, indices[..., None], torch.zeros_like(x[..., :1]))
         return x, rep
