@@ -76,7 +76,7 @@ def get_score_fn(model, train=False, sampling=False):
 
     def score_fn(x, sigma, labels=None):
         device_type = 'cuda' if x.is_cuda else 'cpu'
-        with torch.amp.autocast(device_type, dtype=torch.bfloat16, enabled=(device_type == 'cuda')):
+        with torch.amp.autocast(device_type, dtype=torch.float16, enabled=(device_type == 'cuda')):
             sigma = sigma.reshape(-1)
             model_output = model_fn(x, sigma, labels)
             if isinstance(model_output, tuple):

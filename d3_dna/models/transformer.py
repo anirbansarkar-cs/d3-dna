@@ -243,15 +243,17 @@ class TransformerModel(nn.Module):
         rotary_cos_sin = self.rotary_emb(x)
 
         # Forward through transformer blocks
-        with torch.amp.autocast('cuda', dtype=torch.bfloat16):
-            for i in range(len(self.blocks)):
-                x = self.blocks[i](x, rotary_cos_sin, c, seqlens=None)
-                if layer_idx is not None:
-                    if i == layer_idx:
-                        rep = x
-                else:
-                    rep = None
-            x = self.output_layer(x, c)
+        # NOTE: inner bfloat16 autocast disabled to match original SEDD repo
+        # (model/transformer.py:378 has it commented out). The outer
+        # get_score_fn autocast is the single precision-control point.
+        for i in range(len(self.blocks)):
+            x = self.blocks[i](x, rotary_cos_sin, c, seqlens=None)
+            if layer_idx is not None:
+                if i == layer_idx:
+                    rep = x
+            else:
+                rep = None
+        x = self.output_layer(x, c)
 
         # Mask out the input tokens (standard diffusion technique)
         if self.config.graph.type == "bridge":
