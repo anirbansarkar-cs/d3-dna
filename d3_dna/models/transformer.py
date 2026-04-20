@@ -242,10 +242,10 @@ class TransformerModel(nn.Module):
         # Rotary position encoding
         rotary_cos_sin = self.rotary_emb(x)
 
-        # Forward through transformer blocks
-        # NOTE: inner bfloat16 autocast disabled to match original SEDD repo
-        # (model/transformer.py:378 has it commented out). The outer
-        # get_score_fn autocast is the single precision-control point.
+        # Forward through transformer blocks.
+        # Matches original SEDD repo: no inner autocast. The outer get_score_fn
+        # autocast (d3_dna/models/diffusion.py:get_score_fn) is the single
+        # precision-control point.
         for i in range(len(self.blocks)):
             x = self.blocks[i](x, rotary_cos_sin, c, seqlens=None)
             if layer_idx is not None:
