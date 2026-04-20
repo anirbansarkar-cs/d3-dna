@@ -414,10 +414,11 @@ class D3Trainer:
         trainer.fit(train_dataset, val_dataset)
     """
 
-    def __init__(self, config, work_dir: Optional[str] = None):
+    def __init__(self, config, work_dir: Optional[str] = None, callbacks=None):
         if isinstance(config, (str, os.PathLike)):
             config = load_config(str(config))
         self.cfg = config
+        self.extra_callbacks = callbacks or []
         timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
         self.work_dir = work_dir or f"experiments/d3_run_{timestamp}"
 
@@ -437,15 +438,19 @@ class D3Trainer:
         return trainer, lightning_module
 
     def _build_trainer(self):
-        callbacks = self._setup_callbacks()
         loggers = self._setup_logging()
+        callbacks = self._setup_callbacks(has_logger=bool(loggers))
 
         trainer_args = {
             'max_epochs': self.cfg.training.get('max_epochs', 300),
             'log_every_n_steps': self.cfg.training.get('log_freq', 50),
             'check_val_every_n_epoch': self.cfg.training.get('val_every_n_epochs', 4),
             'accumulate_grad_batches': self.cfg.training.accum,
-            'precision': 'bf16-mixed',
+            # fp16-mixed matches the fp16 autocast in get_score_fn (d3_dna/models/
+            # diffusion.py) that the training loss path also goes through. Lightning
+            # installs a GradScaler for '16-mixed' (needed for fp16 gradient stability)
+            # but not for 'bf16-mixed'.
+            'precision': '16-mixed',
             'gradient_clip_val': self.cfg.optim.grad_clip if self.cfg.optim.grad_clip >= 0 else None,
             'enable_checkpointing': True,
             'enable_progress_bar': True,
@@ -466,7 +471,7 @@ class D3Trainer:
 
         return pl.Trainer(**trainer_args)
 
-    def _setup_callbacks(self):
+    def _setup_callbacks(self, has_logger=True):
         callbacks = []
 
         checkpoint_callback = ModelCheckpoint(
@@ -479,7 +484,8 @@ class D3Trainer:
             every_n_epochs=self.cfg.training.get('checkpoint_every_n_epochs', 10)
         )
         callbacks.append(checkpoint_callback)
-        callbacks.append(LearningRateMonitor(logging_interval='step'))
+        if has_logger:
+            callbacks.append(LearningRateMonitor(logging_interval='step'))
 
         if hasattr(self.cfg.training, 'early_stopping_patience') and self.cfg.training.early_stopping_patience:
             early_stop = EarlyStopping(
@@ -489,17 +495,21 @@ class D3Trainer:
             )
             callbacks.append(early_stop)
 
+        callbacks.extend(self.extra_callbacks)
         return callbacks
 
     def _setup_logging(self):
         loggers = []
 
-        tb_logger = TensorBoardLogger(
-            save_dir=self.work_dir,
-            name="lightning_logs",
-            version=None
-        )
-        loggers.append(tb_logger)
+        try:
+            tb_logger = TensorBoardLogger(
+                save_dir=self.work_dir,
+                name="lightning_logs",
+                version=None
+            )
+            loggers.append(tb_logger)
+        except (ImportError, ModuleNotFoundError):
+            print("tensorboard not installed, skipping TensorBoard logging.")
 
         if hasattr(self.cfg, 'wandb') and self.cfg.wandb.get('enabled', False):
             try:
