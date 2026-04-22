@@ -15,7 +15,7 @@ Usage (DDSM):
     python sample_ddsm_protocol.py --model ddsm \
         --checkpoint /grid/koo/home/duran/ddsm_checkpoint.pth \
         --steps 100 --output-dir generated/ddsm_5perTSS_100 \
-        --ddsm-schedule /grid/koo/home/shared/d3/ddsm_artifacts/steps400.cat4.speed_balance.time4.0.samples100000.pth
+        --ddsm-schedule /grid/koo/home/duran/scratch/ddsm_artifacts/steps400.cat4.speed_balance.time4.0.samples100000.pth
 """
 
 import argparse

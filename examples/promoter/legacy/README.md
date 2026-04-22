@@ -43,7 +43,7 @@ python sample_ddsm_protocol.py --model d3 \
 # DDSM side
 python sample_ddsm_protocol.py --model ddsm \
     --checkpoint /path/to/ddsm_checkpoint.pth \
-    --ddsm-schedule /grid/koo/home/shared/d3/ddsm_artifacts/steps400.cat4.speed_balance.time4.0.samples100000.pth \
+    --ddsm-schedule /grid/koo/home/duran/scratch/ddsm_artifacts/steps400.cat4.speed_balance.time4.0.samples100000.pth \
     --steps 100 --batch-size 64 \
     --output-dir generated/ddsm_5perTSS
 ```
