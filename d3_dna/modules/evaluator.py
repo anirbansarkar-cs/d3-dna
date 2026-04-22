@@ -84,7 +84,7 @@ class D3Evaluator:
         from d3_dna.evals.metrics import (
             compute_fidelity_mse,
             compute_ks_statistic,
-            compute_js_spectrum,
+            compute_js_spectrum,  # returns JS divergence (not distance)
             compute_auroc,
         )
 
@@ -129,9 +129,9 @@ class D3Evaluator:
                 print(f"  ks_statistic: {v:.6f}")
             elif t == "js":
                 spec = compute_js_spectrum(x_real, x_gen, kmer_ks)
-                results["js_distance"] = {f"k{k}": v for k, v in spec.items()}
+                results["js_divergence"] = {f"k{k}": v for k, v in spec.items()}
                 for k, v in spec.items():
-                    print(f"  js_distance k={k}: {v:.6f}")
+                    print(f"  js_divergence k={k}: {v:.6f}")
             elif t == "auroc":
                 v = compute_auroc(x_real, x_gen, device=self.device)
                 results["auroc"] = v

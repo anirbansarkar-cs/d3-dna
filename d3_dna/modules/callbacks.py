@@ -108,7 +108,7 @@ class BaseSPMSEValidationCallback(Callback, ABC):
 
         val_sequences, val_targets = self._get_validation_data(trainer)
         val_targets = val_targets.to(device)
-        seq_length = pl_module.config.dataset.sequence_length
+        seq_length = pl_module.cfg.dataset.sequence_length
 
         sampling_fn = get_pc_sampler(
             pl_module.graph, pl_module.noise,
