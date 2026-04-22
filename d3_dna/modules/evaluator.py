@@ -84,7 +84,7 @@ class D3Evaluator:
         from d3_dna.evals.metrics import (
             compute_fidelity_mse,
             compute_ks_statistic,
-            compute_js_spectrum,
+            compute_js_spectrum,  # returns JS divergence (not distance)
             compute_auroc,
         )
 
@@ -97,9 +97,11 @@ class D3Evaluator:
         x_gen = self._normalize_onehot(samples)
 
         if len(x_real) != len(x_gen):
-            n = min(len(x_real), len(x_gen))
-            print(f"[eval] truncating to paired N={n} (real={len(x_real)}, gen={len(x_gen)})")
-            x_real, x_gen = x_real[:n], x_gen[:n]
+            raise ValueError(
+                f"Real and generated sample counts must match for paired evaluation, "
+                f"but got real={len(x_real)} vs gen={len(x_gen)}. "
+                f"If using --paired-repeat N, generate N samples per TSS in sample.py too."
+            )
         print(f"[eval] real={x_real.shape} gen={x_gen.shape}")
 
         results: dict = {}
@@ -127,9 +129,9 @@ class D3Evaluator:
                 print(f"  ks_statistic: {v:.6f}")
             elif t == "js":
                 spec = compute_js_spectrum(x_real, x_gen, kmer_ks)
-                results["js_distance"] = {f"k{k}": v for k, v in spec.items()}
+                results["js_divergence"] = {f"k{k}": v for k, v in spec.items()}
                 for k, v in spec.items():
-                    print(f"  js_distance k={k}: {v:.6f}")
+                    print(f"  js_divergence k={k}: {v:.6f}")
             elif t == "auroc":
                 v = compute_auroc(x_real, x_gen, device=self.device)
                 results["auroc"] = v

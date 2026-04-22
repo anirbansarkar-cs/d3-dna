@@ -107,7 +107,8 @@ class ConvolutionalModel(nn.Module):
         if labels is not None:
             if labels.dim() == 2:
                 if labels.shape[-1] == 1:
-                    signal_features = labels.unsqueeze(-1).expand(-1, -1, x.shape[1])
+                    # (batch, 1) -> (batch, seq_len, 1)
+                    signal_features = labels.unsqueeze(1).expand(-1, x.shape[1], -1)
                 else:
                     raise NotImplementedError(
                         "Multi-dimensional labels need dataset-specific preprocessing. "
@@ -115,9 +116,9 @@ class ConvolutionalModel(nn.Module):
                     )
             elif labels.dim() == 3:
                 if labels.shape[1] == x.shape[1]:
-                    signal_features = labels.transpose(1, 2)
+                    signal_features = labels  # (batch, seq_len, signal_dim)
                 elif labels.shape[2] == x.shape[1]:
-                    signal_features = labels
+                    signal_features = labels.transpose(1, 2)  # -> (batch, seq_len, signal_dim)
                 else:
                     raise ValueError(f"Label dimensions {labels.shape} don't match sequence length {x.shape[1]}")
             else:
@@ -125,7 +126,7 @@ class ConvolutionalModel(nn.Module):
 
             x = torch.cat([x, signal_features], dim=-1)
         else:
-            signal_features = torch.zeros(x.shape[0], 1, x.shape[1], device=x.device, dtype=x.dtype)
+            signal_features = torch.zeros(x.shape[0], x.shape[1], 1, device=x.device, dtype=x.dtype)
             x = torch.cat([x, signal_features], dim=-1)
 
         # Transpose for conv1d: (batch_size, features, seq_length)

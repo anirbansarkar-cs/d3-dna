@@ -70,16 +70,17 @@ def _kmer_distribution(x, k):
     return counts / total
 
 
-def compute_js_distance(x_real, x_gen, k):
-    """Jensen-Shannon distance (sqrt of divergence, natural log) between k-mer distributions."""
+def compute_js_divergence(x_real, x_gen, k):
+    """Jensen-Shannon divergence (base e) between k-mer distributions."""
     P = _kmer_distribution(x_real, k)
     Q = _kmer_distribution(x_gen, k)
-    return float(scipy.spatial.distance.jensenshannon(P, Q))
+    d = scipy.spatial.distance.jensenshannon(P, Q)
+    return float(d ** 2)
 
 
 def compute_js_spectrum(x_real, x_gen, ks):
-    """Return {k: JS distance} for each k in ks."""
-    return {int(k): compute_js_distance(x_real, x_gen, int(k)) for k in ks}
+    """Return {k: JS divergence} for each k in ks."""
+    return {int(k): compute_js_divergence(x_real, x_gen, int(k)) for k in ks}
 
 
 # =============================================================================

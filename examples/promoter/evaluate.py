@@ -24,7 +24,7 @@ from d3_dna import D3Evaluator
 from oracle import load as load_sei_oracle
 
 
-DEFAULT_REAL_DATA = "/grid/koo/home/shared/d3/data/promoter/Promoter_data_40k.npz"
+DEFAULT_REAL_DATA = "/grid/koo/home/shared/d3/data/promoter/Promoter_data.npz"
 
 
 def _load_promoter_real(path: str) -> np.ndarray:

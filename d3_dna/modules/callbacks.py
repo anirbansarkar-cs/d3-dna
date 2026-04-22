@@ -69,8 +69,10 @@ class BaseSPMSEValidationCallback(Callback, ABC):
         if stage == "fit":
             self.oracle_model = self.load_oracle_model()
             if self.oracle_model is not None:
-                self.oracle_model = self.oracle_model.to(pl_module.device)
-                self.oracle_model.eval()
+                if hasattr(self.oracle_model, 'to'):
+                    self.oracle_model = self.oracle_model.to(pl_module.device)
+                if hasattr(self.oracle_model, 'eval'):
+                    self.oracle_model.eval()
             else:
                 self.enabled = False
 
@@ -101,12 +103,12 @@ class BaseSPMSEValidationCallback(Callback, ABC):
 
     def _run_sp_mse_validation(self, trainer: Trainer, pl_module: LightningModule):
         device = pl_module.device
-        if self.oracle_model is not None:
+        if self.oracle_model is not None and hasattr(self.oracle_model, 'to'):
             self.oracle_model = self.oracle_model.to(device)
 
         val_sequences, val_targets = self._get_validation_data(trainer)
         val_targets = val_targets.to(device)
-        seq_length = pl_module.config.dataset.sequence_length
+        seq_length = pl_module.cfg.dataset.sequence_length
 
         sampling_fn = get_pc_sampler(
             pl_module.graph, pl_module.noise,
@@ -122,6 +124,9 @@ class BaseSPMSEValidationCallback(Callback, ABC):
                 pl_module.ema.copy_to(pl_module.score_model.parameters())
             try:
                 generated_sequences = sampling_fn(pl_module.score_model, val_targets)
+                if generated_sequences.unique().numel() <= 1:
+                    print("[sp-mse] WARNING: sampling produced degenerate sequences, skipping validation")
+                    return
                 val_score = self.get_oracle_predictions(val_sequences, device)
                 generated_score = self.get_oracle_predictions(generated_sequences, device)
                 sp_mse = (val_score - generated_score) ** 2
