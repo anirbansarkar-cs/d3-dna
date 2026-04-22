@@ -30,7 +30,7 @@ parser.add_argument("--batch-size", type=int, default=64, help="Sequences per GP
 parser.add_argument("--output-dir", type=str, default="generated", help="Output directory")
 parser.add_argument("--use-test-labels", action="store_true", help="Use test set labels for conditional generation")
 parser.add_argument("--paired-repeat", type=int, default=1, help="Generate N samples per TSS (5 for DDSM 5-per-TSS protocol)")
-parser.add_argument("--config", type=str, default="config.yaml", help="Config YAML path")
+parser.add_argument("--config", type=str, default="config_transformer.yaml", help="Config YAML path")
 parser.add_argument("--predictor", type=str, default=None, help="Override sampling predictor (euler or analytic)")
 args = parser.parse_args()
 
