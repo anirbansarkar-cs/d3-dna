@@ -7,8 +7,9 @@ oracles and averaging/masking logic live in each ``examples/<dataset>/``.
 from d3_dna.evals.metrics import (
     compute_fidelity_mse,
     compute_ks_statistic,
-    compute_js_distance,
+    compute_js_divergence,
     compute_js_spectrum,
+    compute_mean_js_divergence,
     compute_auroc,
     DiscriminabilityCNN,
 )
@@ -16,8 +17,9 @@ from d3_dna.evals.metrics import (
 __all__ = [
     "compute_fidelity_mse",
     "compute_ks_statistic",
-    "compute_js_distance",
+    "compute_js_divergence",
     "compute_js_spectrum",
+    "compute_mean_js_divergence",
     "compute_auroc",
     "DiscriminabilityCNN",
 ]

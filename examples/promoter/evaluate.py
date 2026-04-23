@@ -51,8 +51,8 @@ def main():
     p.add_argument("--output-dir", default="eval_results", help="Output directory")
     p.add_argument("--tests", default="mse,ks,js,auroc",
                    help="Comma-separated subset of {mse,ks,js,auroc}")
-    p.add_argument("--kmer-ks", default="6",
-                   help="k-mer lengths for JS distance (e.g. '6' or '1-7' or '3,6,7')")
+    p.add_argument("--kmer-ks", default="1-7",
+                   help="k-mer lengths for JS divergence mean (e.g. '1-7' or '3,6,7')")
     p.add_argument("--paired-repeat", type=int, default=1,
                    help="Repeat each real seq N times before pairing (5 for DDSM 5-per-TSS protocol)")
     args = p.parse_args()
