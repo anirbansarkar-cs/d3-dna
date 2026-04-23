@@ -78,7 +78,7 @@ class D3Evaluator:
         real_data,
         oracle=None,
         tests=None,
-        kmer_ks=tuple(range(1, 8)),
+        kmer_ks=(6,),
         output_path: Optional[str] = None,
     ) -> dict:
         from d3_dna.evals.metrics import (
@@ -131,7 +131,8 @@ class D3Evaluator:
                 ks_list = [int(k) for k in kmer_ks]
                 js = compute_mean_js_divergence(x_real, x_gen, ks_list)
                 results["js_divergence"] = js
-                print(f"  js_divergence (mean over k={ks_list}): {js:.6f}")
+                label = f"k={ks_list[0]}" if len(ks_list) == 1 else f"mean over k={ks_list}"
+                print(f"  js_divergence ({label}): {js:.6f}")
             elif t == "auroc":
                 v = compute_auroc(x_real, x_gen, device=self.device)
                 results["auroc"] = v
