@@ -1,0 +1,71 @@
+# Promoter — Pure Convolutional (20 dilated conv blocks, 256 channels)
+
+dataset:
+  name: promoter
+  sequence_length: 1024
+  num_classes: 4
+  signal_dim: 1
+
+ngpus: 1
+nnodes: 1
+tokens: 4
+
+model:
+  name: conv
+  type: conv
+  architecture: convolutional
+  conv_channels: 256
+  cond_dim: 128
+  length: 1024
+  scale_by_sigma: false
+
+training:
+  batch_size: 128
+  accum: 1
+  max_epochs: 300
+  checkpoint_every_n_epochs: 4
+  log_freq: 500
+  val_every_n_epochs: 4
+  weight: standard
+  snapshot_sampling: true
+  ema: 0.9999
+
+optim:
+  optimizer: AdamW
+  lr: 0.0003
+  beta1: 0.9
+  beta2: 0.999
+  eps: 1.0e-08
+  weight_decay: 0
+  warmup: 2500
+  grad_clip: 1.0
+
+graph:
+  type: uniform
+  file: data
+  report_all: false
+
+noise:
+  type: geometric
+  sigma_min: 0.0001
+  sigma_max: 20
+
+sampling:
+  predictor: euler
+  steps: 128
+  noise_removal: true
+
+eval:
+  batch_size: 512
+  perplexity: false
+  perplexity_batch_size: 32
+
+wandb:
+  enabled: false
+  project: d3-promoter
+  name: promoter-conv
+
+paths:
+  data_file: /grid/koo/home/shared/d3/data/promoter/Promoter_data.npz
+  oracle_model: /grid/koo/home/shared/d3/oracle_weights/promoter/best.sei.model.pth.tar
+  sei_features: /grid/koo/home/shared/d3/oracle_weights/promoter/target.sei.names

@@ -1,10 +1,14 @@
 """
 Evaluate generated K562 sequences against reference test data.
 
-Built-in SP-MSE evaluation (no external dependencies beyond mpralegnet oracle):
+Uses the vendored LegNet oracle in ``examples/k562/oracle.py`` (no external
+mpralegnet dependency). For each ``sample_*.npz`` replicate, computes SP-MSE
+against the test-set oracle predictions.
+
+Usage (built-in SP-MSE over all replicates):
     python evaluate.py --data data/lenti_MPRA_K562_data.h5 --oracle path/to/oracle.ckpt
 
-Full evaluation with external pipeline (5 metrics):
+Optional external 5-metric pipeline:
     python evaluate.py --data data/lenti_MPRA_K562_data.h5 --oracle path/to/oracle.ckpt \
         --eval-pipeline /path/to/d3_evaluation_pipeline
 """
@@ -16,11 +20,12 @@ import os
 import subprocess
 import sys
 
+import h5py
 import numpy as np
 import torch
 
-# Add mpralegnet to path for oracle loading
-sys.path.insert(0, os.path.expanduser("~/mpralegnet"))
+from oracle import load as load_legnet_oracle
+
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--samples-dir", type=str, default="generated",
@@ -29,6 +34,8 @@ parser.add_argument("--data", type=str, required=True,
                     help="Path to K562 H5 data file")
 parser.add_argument("--oracle", type=str, required=True,
                     help="Path to LegNet oracle checkpoint")
+parser.add_argument("--oracle-config", type=str, default=None,
+                    help="Optional LegNet config.json path (defaults to oracle.DEFAULT_CONFIG)")
 parser.add_argument("--eval-pipeline", type=str, default=None,
                     help="Path to d3_evaluation_pipeline directory (optional, for full 5-metric eval)")
 parser.add_argument("--batch-size", type=int, default=256,
@@ -39,7 +46,6 @@ args = parser.parse_args()
 
 assert os.path.isdir(args.samples_dir), f"Samples directory not found: {args.samples_dir}"
 
-# Discover sample files
 sample_files = sorted(glob.glob(os.path.join(args.samples_dir, "sample_*.npz")))
 assert sample_files, f"No sample_*.npz files found in {args.samples_dir}"
 print(f"Found {len(sample_files)} sample replicates")
@@ -50,49 +56,30 @@ os.makedirs(args.output_dir, exist_ok=True)
 
 print("\n=== SP-MSE Evaluation (built-in) ===")
 
-# Load test data
-import h5py
 with h5py.File(args.data, "r") as f:
     x_test_onehot = np.array(f["onehot_test"])  # (N, 230, 4)
 
 # (N, 230, 4) -> (N, 4, 230) for oracle input
-x_test = torch.from_numpy(x_test_onehot).permute(0, 2, 1).float()
+x_test = np.transpose(x_test_onehot, (0, 2, 1)).astype(np.float32)
 
-# Load oracle
-from mpralegnet import LitModel
-from mpralegnet.config import get_default_config
-oracle = LitModel.load_from_checkpoint(args.oracle, tr_cfg=get_default_config()).eval()
 device = "cuda" if torch.cuda.is_available() else "cpu"
-oracle = oracle.to(device)
+oracle = load_legnet_oracle(args.oracle, device, config_path=args.oracle_config)
 
-def oracle_predict(x_onehot, batch_size=256):
-    """Run oracle predictions in batches. Input: (N, 4, seq_len) tensor."""
-    preds = []
-    with torch.no_grad():
-        for i in range(0, len(x_onehot), batch_size):
-            batch = x_onehot[i:i + batch_size].to(device)
-            pred = oracle.model(batch)
-            preds.append(pred.cpu())
-    return torch.cat(preds, dim=0)
-
-# Oracle predictions on test data (shared across replicates)
 print("Predicting on test sequences...")
-y_test = oracle_predict(x_test, args.batch_size)
+y_test = oracle.predict(x_test, batch_size=args.batch_size)  # (N, 1)
 
-# Compute SP-MSE per replicate
 sp_mse_results = {}
 for npz_path in sample_files:
     name = os.path.splitext(os.path.basename(npz_path))[0]
     data = np.load(npz_path)
     x_gen_onehot = data["arr_0"]  # (N, 230, 4)
-    x_gen = torch.from_numpy(x_gen_onehot).permute(0, 2, 1).float()
+    x_gen = np.transpose(x_gen_onehot, (0, 2, 1)).astype(np.float32)
 
-    y_gen = oracle_predict(x_gen, args.batch_size)
-    mse = torch.mean((y_test - y_gen) ** 2).item()
+    y_gen = oracle.predict(x_gen, batch_size=args.batch_size)  # (N, 1)
+    mse = float(np.mean((y_test - y_gen) ** 2))
     sp_mse_results[name] = mse
     print(f"  {name}: SP-MSE = {mse:.6f}")
 
-# Save SP-MSE CSV
 csv_path = os.path.join(args.output_dir, "sp_mse.csv")
 with open(csv_path, "w", newline="") as f:
     writer = csv.writer(f)
@@ -101,10 +88,10 @@ with open(csv_path, "w", newline="") as f:
     writer.writerow(["sp_mse"] + [sp_mse_results[n] for n in names])
 print(f"\nSP-MSE results saved to {csv_path}")
 
-mean_mse = np.mean(list(sp_mse_results.values()))
+mean_mse = float(np.mean(list(sp_mse_results.values())))
 print(f"Mean SP-MSE across {len(sp_mse_results)} replicates: {mean_mse:.6f}")
 
-# ── External pipeline (optional, for full 5-metric eval) ────────────────────
+# ── External pipeline (optional) ────────────────────────────────────────────
 
 if args.eval_pipeline:
     print(f"\n=== External Pipeline Evaluation (5 metrics) ===")
