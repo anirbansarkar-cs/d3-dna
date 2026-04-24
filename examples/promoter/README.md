@@ -78,7 +78,10 @@ python evaluate.py --samples generated/samples.npz --kmer-ks 1-7
 python evaluate.py --samples generated/samples.npz --paired-repeat 5
 
 # Subset of metrics
-python evaluate.py --samples generated/samples.npz --tests mse,ks
+python evaluate.py --samples-dir generated --tests mse,ks
+
+# JS averaged over k ∈ {1..7} instead of single k=6
+python evaluate.py --samples-dir generated --kmer-ks 1-7
 ```
 
 `evaluate.py` loads the SEI oracle (for MSE/KS), reads the real-data NPZ (one-hot channels 0–3), and dispatches through `D3Evaluator`.
