@@ -99,7 +99,9 @@ def checkpoint_cache_dir() -> Path:
 @pytest.fixture(scope="session")
 def fetch_checkpoint(checkpoint_cache_dir):
     """Factory fixture: `fetch_checkpoint("D3_Tran_Promoter.ckpt") -> Path`."""
-    from tests.utils import fetch_zenodo
+    # conftest.py and utils.py both live in tests/, which pytest puts on
+    # sys.path automatically (rootdir-based conftest loader).
+    from utils import fetch_zenodo
 
     def _fetch(filename: str) -> Path:
         return fetch_zenodo(filename, checkpoint_cache_dir)
