@@ -52,7 +52,8 @@ def main():
     p.add_argument("--tests", default="mse,ks,js,auroc",
                    help="Comma-separated subset of {mse,ks,js,auroc}")
     p.add_argument("--kmer-ks", default="6",
-                   help="k-mer lengths for JS distance (e.g. '6' or '1-7' or '3,6,7')")
+                   help="k-mer length(s) for JS divergence. Single k='6' reports that k "
+                        "alone; interval '1-7' or list '3,6,7' reports the mean across them.")
     p.add_argument("--paired-repeat", type=int, default=1,
                    help="Repeat each real seq N times before pairing (5 for DDSM 5-per-TSS protocol)")
     args = p.parse_args()

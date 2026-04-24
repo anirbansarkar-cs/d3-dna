@@ -9,9 +9,10 @@ Oracle-based (require pre-computed (N, F) predictions):
     compute_ks_statistic   -- mean per-feature two-sample KS statistic
 
 Sequence-only (operate directly on (N, 4, L) one-hot arrays):
-    compute_js_distance    -- Jensen-Shannon distance at a single k
-    compute_js_spectrum    -- dict {k: JS distance} over a list of k values
-    compute_auroc          -- DiscriminabilityCNN classifier AUROC (real=1, gen=0)
+    compute_js_divergence       -- Jensen-Shannon divergence at a single k
+    compute_js_spectrum         -- dict {k: JS divergence} over a list of k values
+    compute_mean_js_divergence  -- mean JS divergence over k values (default k=1..7)
+    compute_auroc               -- DiscriminabilityCNN classifier AUROC (real=1, gen=0)
 """
 
 import numpy as np
@@ -81,6 +82,12 @@ def compute_js_divergence(x_real, x_gen, k):
 def compute_js_spectrum(x_real, x_gen, ks):
     """Return {k: JS divergence} for each k in ks."""
     return {int(k): compute_js_divergence(x_real, x_gen, int(k)) for k in ks}
+
+
+def compute_mean_js_divergence(x_real, x_gen, ks=range(1, 8)):
+    """Mean Jensen-Shannon divergence across k-mer lengths `ks` (default k=1..7)."""
+    spec = compute_js_spectrum(x_real, x_gen, ks)
+    return float(np.mean(list(spec.values())))
 
 
 # =============================================================================
