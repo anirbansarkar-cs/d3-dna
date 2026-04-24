@@ -15,9 +15,11 @@ End-to-end example of training, sampling, and evaluating a D3 conditional diffus
 |---|---|
 | `config.yaml` | Model and training configuration |
 | `data.py` | `K562Dataset` class (loads H5, splits train/valid/test) |
-| `train.py` | Training script using `D3Trainer` |
-| `sample.py` | Conditional sampling using `D3Sampler` |
-| `evaluate.py` | Evaluation: built-in SP-MSE + optional external 5-metric pipeline |
+| `oracle.py` | Vendored LegNet oracle (no external package). |
+| `callbacks.py` | `K562MSECallback` — SP-MSE validation against LegNet during training. |
+| `train.py` | Training script using `D3Trainer` with `K562MSECallback` wired in. |
+| `sample.py` | Conditional sampling using `D3Sampler` (produces `sample_*.npz` replicates). |
+| `evaluate.py` | MSE, KS, JS, AUROC via `D3Evaluator` + LegNet oracle, per-replicate + mean. |
 
 ## Usage
 
@@ -47,30 +49,30 @@ Output: `generated/sample_{i}.npz` (one-hot) and `generated/sample_{i}.fasta` pe
 ### 3. Evaluation
 
 ```bash
-# Built-in SP-MSE only
+# All four metrics, one row per sample_*.npz plus a mean row
 python evaluate.py \
     --samples-dir generated \
     --data data/lenti_MPRA_K562_data.h5 \
     --oracle data/oracle_best_model.ckpt
 
-# Full 5-metric evaluation (requires external pipeline)
-python evaluate.py \
-    --samples-dir generated \
-    --data data/lenti_MPRA_K562_data.h5 \
-    --oracle data/oracle_best_model.ckpt \
-    --eval-pipeline /path/to/d3_evaluation_pipeline
+# Subset of metrics
+python evaluate.py --samples-dir generated --data <H5> --oracle <ckpt> --tests mse,ks
+
+# JS averaged over k ∈ {1..7} instead of single k=6
+python evaluate.py --samples-dir generated --data <H5> --oracle <ckpt> --kmer-ks 1-7
 ```
+
+Output: `eval_results/<replicate>.json` per sample file, `eval_results/summary.csv` (per-replicate rows + mean), `eval_results/summary.json` (full structure).
 
 ### Oracle dependency
 
-The LegNet oracle architecture is vendored in `oracle.py` (no external package required). The built-in SP-MSE evaluation only needs the oracle checkpoint (`--oracle`) and optional LegNet config (`--oracle-config`, defaults to the shared path). The external 5-metric pipeline still requires its own install at the path passed via `--eval-pipeline`.
+The LegNet oracle architecture is vendored in `oracle.py`. `evaluate.py` needs the checkpoint (`--oracle`) and optionally a LegNet config (`--oracle-config`, defaults to the shared `DEFAULT_CONFIG` path). No external evaluation pipeline required.
 
 ## Metrics
 
 | Metric | Description | Direction |
 |---|---|---|
-| SP-MSE | Sample-Prediction MSE (oracle fidelity) | Lower is better |
-| Discriminability AUROC | Real vs generated classification | Higher is better |
-| K-mer JS distance | K-mer spectrum divergence | Lower is better |
-| Percent identity | Max pairwise identity to training set | Similarity measure |
-| Predictive dist. shift | KS statistic on oracle predictions | Lower is better |
+| `fidelity_mse` | Paired MSE of LegNet oracle predictions (real vs generated) | Lower is better |
+| `ks_statistic` | Mean per-feature two-sample KS on oracle predictions | Lower is better |
+| `js_divergence` | JS divergence of k-mer distributions. Default: single k=6. With `--kmer-ks 1-7` (or any interval/list), returns the mean over those k's. | Lower is better |
+| `auroc` | AUROC of a CNN discriminator (real=1, gen=0) | Closer to 0.5 is better |

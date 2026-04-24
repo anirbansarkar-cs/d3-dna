@@ -61,16 +61,19 @@ Output: `generated/samples.npz` (one-hot `(N, 1024, 4)`) and `generated/samples.
 ### 3. Evaluation
 
 ```bash
-python evaluate.py --samples generated/samples.npz
+python evaluate.py --samples-dir generated
 
 # DDSM 5-per-TSS protocol: tile real set 5x before pairing
-python evaluate.py --samples generated/samples.npz --paired-repeat 5
+python evaluate.py --samples-dir generated --paired-repeat 5
 
 # Subset of metrics
-python evaluate.py --samples generated/samples.npz --tests mse,ks
+python evaluate.py --samples-dir generated --tests mse,ks
+
+# JS averaged over k ∈ {1..7} instead of single k=6
+python evaluate.py --samples-dir generated --kmer-ks 1-7
 ```
 
-`evaluate.py` loads the SEI oracle (for MSE/KS), extracts the one-hot DNA channels from the 40k NPZ, and dispatches metric computation through `D3Evaluator`.
+`evaluate.py` loads the SEI oracle (for MSE/KS), extracts the one-hot DNA channels from the 40k NPZ, and dispatches metric computation through `D3Evaluator` for every `sample*.npz` in `--samples-dir` (matches both single `samples.npz` and multi-replicate `sample_*.npz` outputs). Results land in `eval_results/<replicate>.json`, `eval_results/summary.csv`, and `eval_results/summary.json` (per-replicate + mean).
 
 ## Metrics
 

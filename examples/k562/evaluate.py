@@ -1,129 +1,124 @@
-"""
-Evaluate generated K562 sequences against reference test data.
+"""Evaluate generated K562 sequences against the real test split.
 
-Uses the vendored LegNet oracle in ``examples/k562/oracle.py`` (no external
-mpralegnet dependency). For each ``sample_*.npz`` replicate, computes SP-MSE
-against the test-set oracle predictions.
+Owns everything K562-specific:
+    * loading the H5 real-data layout (onehot_test -> (N, 4, 230))
+    * loading the LegNet oracle
+    * iterating over sample replicates (sample_*.npz or samples.npz) in --samples-dir
 
-Usage (built-in SP-MSE over all replicates):
-    python evaluate.py --data data/lenti_MPRA_K562_data.h5 --oracle path/to/oracle.ckpt
+Delegates the metric math to d3_dna.D3Evaluator (no external pipeline).
 
-Optional external 5-metric pipeline:
-    python evaluate.py --data data/lenti_MPRA_K562_data.h5 --oracle path/to/oracle.ckpt \
-        --eval-pipeline /path/to/d3_evaluation_pipeline
+Usage:
+    python evaluate.py --samples-dir generated --data <H5> --oracle <ckpt>
+    python evaluate.py --samples-dir generated --data <H5> --oracle <ckpt> --tests mse,ks
+    python evaluate.py --samples-dir generated --data <H5> --oracle <ckpt> --kmer-ks 1-7
 """
 
 import argparse
 import csv
 import glob
+import json
 import os
-import subprocess
-import sys
 
 import h5py
 import numpy as np
 import torch
 
+from d3_dna import D3Evaluator
 from oracle import load as load_legnet_oracle
 
 
-parser = argparse.ArgumentParser()
-parser.add_argument("--samples-dir", type=str, default="generated",
-                    help="Directory containing sample_*.npz files")
-parser.add_argument("--data", type=str, required=True,
-                    help="Path to K562 H5 data file")
-parser.add_argument("--oracle", type=str, required=True,
-                    help="Path to LegNet oracle checkpoint")
-parser.add_argument("--oracle-config", type=str, default=None,
-                    help="Optional LegNet config.json path (defaults to oracle.DEFAULT_CONFIG)")
-parser.add_argument("--eval-pipeline", type=str, default=None,
-                    help="Path to d3_evaluation_pipeline directory (optional, for full 5-metric eval)")
-parser.add_argument("--batch-size", type=int, default=256,
-                    help="Batch size for oracle inference")
-parser.add_argument("--output-dir", type=str, default="eval_results",
-                    help="Directory for evaluation results")
-args = parser.parse_args()
+def parse_ks(spec: str):
+    spec = spec.strip()
+    if "-" in spec and "," not in spec:
+        lo, hi = [int(v) for v in spec.split("-")]
+        return list(range(lo, hi + 1))
+    return [int(v) for v in spec.split(",") if v]
 
-assert os.path.isdir(args.samples_dir), f"Samples directory not found: {args.samples_dir}"
 
-sample_files = sorted(glob.glob(os.path.join(args.samples_dir, "sample_*.npz")))
-assert sample_files, f"No sample_*.npz files found in {args.samples_dir}"
-print(f"Found {len(sample_files)} sample replicates")
+def _load_k562_real(h5_path: str) -> np.ndarray:
+    """Load the K562 test split one-hot (N, 4, 230) from the H5 file."""
+    with h5py.File(h5_path, "r") as f:
+        onehot = np.array(f["onehot_test"])  # (N, 230, 4)
+    return np.transpose(onehot, (0, 2, 1)).astype(np.float32)
 
-os.makedirs(args.output_dir, exist_ok=True)
 
-# ── Built-in SP-MSE evaluation ──────────────────────────────────────────────
+def main():
+    p = argparse.ArgumentParser(description="Evaluate generated K562 sequences via D3Evaluator")
+    p.add_argument("--samples-dir", default="generated",
+                   help="Directory containing sample_*.npz (or samples.npz) replicates")
+    p.add_argument("--data", required=True, help="Path to K562 H5 data file")
+    p.add_argument("--oracle", required=True, help="Path to LegNet oracle checkpoint")
+    p.add_argument("--oracle-config", default=None,
+                   help="Optional LegNet config JSON path (defaults to oracle.DEFAULT_CONFIG)")
+    p.add_argument("--output-dir", default="eval_results", help="Output directory")
+    p.add_argument("--tests", default="mse,ks,js,auroc",
+                   help="Comma-separated subset of {mse,ks,js,auroc}")
+    p.add_argument("--kmer-ks", default="6",
+                   help="k-mer length(s) for JS. Single k='6' reports that k; "
+                        "interval '1-7' or list '3,6,7' reports the mean.")
+    p.add_argument("--batch-size", type=int, default=256,
+                   help="Batch size for oracle inference")
+    args = p.parse_args()
 
-print("\n=== SP-MSE Evaluation (built-in) ===")
+    assert os.path.isdir(args.samples_dir), f"Samples directory not found: {args.samples_dir}"
+    sample_files = sorted(glob.glob(os.path.join(args.samples_dir, "sample*.npz")))
+    assert sample_files, f"No sample*.npz files found in {args.samples_dir}"
+    print(f"Found {len(sample_files)} sample file(s) in {args.samples_dir}")
 
-with h5py.File(args.data, "r") as f:
-    x_test_onehot = np.array(f["onehot_test"])  # (N, 230, 4)
+    os.makedirs(args.output_dir, exist_ok=True)
 
-# (N, 230, 4) -> (N, 4, 230) for oracle input
-x_test = np.transpose(x_test_onehot, (0, 2, 1)).astype(np.float32)
+    tests = [t.strip() for t in args.tests.split(",") if t.strip()]
+    ks = parse_ks(args.kmer_ks)
+    device = "cuda" if torch.cuda.is_available() else "cpu"
 
-device = "cuda" if torch.cuda.is_available() else "cpu"
-oracle = load_legnet_oracle(args.oracle, device, config_path=args.oracle_config)
+    real = _load_k562_real(args.data)
+    print(f"[k562] real test split: shape={real.shape}")
 
-print("Predicting on test sequences...")
-y_test = oracle.predict(x_test, batch_size=args.batch_size)  # (N, 1)
+    oracle = None
+    if any(t in ("mse", "ks") for t in tests):
+        oracle = load_legnet_oracle(args.oracle, device, config_path=args.oracle_config)
 
-sp_mse_results = {}
-for npz_path in sample_files:
-    name = os.path.splitext(os.path.basename(npz_path))[0]
-    data = np.load(npz_path)
-    x_gen_onehot = data["arr_0"]  # (N, 230, 4)
-    x_gen = np.transpose(x_gen_onehot, (0, 2, 1)).astype(np.float32)
+    ev = D3Evaluator(tests=tests, device=device)
 
-    y_gen = oracle.predict(x_gen, batch_size=args.batch_size)  # (N, 1)
-    mse = float(np.mean((y_test - y_gen) ** 2))
-    sp_mse_results[name] = mse
-    print(f"  {name}: SP-MSE = {mse:.6f}")
+    per_replicate: dict[str, dict] = {}
+    for npz_path in sample_files:
+        name = os.path.splitext(os.path.basename(npz_path))[0]
+        print(f"\n=== {name} ===")
+        out_json = os.path.join(args.output_dir, f"{name}.json")
+        results = ev.evaluate(
+            samples=npz_path,
+            real_data=real,
+            oracle=oracle,
+            tests=tests,
+            kmer_ks=ks,
+            output_path=out_json,
+        )
+        per_replicate[name] = results
 
-csv_path = os.path.join(args.output_dir, "sp_mse.csv")
-with open(csv_path, "w", newline="") as f:
-    writer = csv.writer(f)
-    names = sorted(sp_mse_results.keys())
-    writer.writerow([""] + names)
-    writer.writerow(["sp_mse"] + [sp_mse_results[n] for n in names])
-print(f"\nSP-MSE results saved to {csv_path}")
+    # Aggregate: mean of each numeric metric across replicates.
+    metric_keys = sorted({k for r in per_replicate.values() for k in r.keys()})
+    aggregate = {
+        k: float(np.mean([r[k] for r in per_replicate.values() if k in r]))
+        for k in metric_keys
+    }
 
-mean_mse = float(np.mean(list(sp_mse_results.values())))
-print(f"Mean SP-MSE across {len(sp_mse_results)} replicates: {mean_mse:.6f}")
+    csv_path = os.path.join(args.output_dir, "summary.csv")
+    with open(csv_path, "w", newline="") as f:
+        writer = csv.writer(f)
+        writer.writerow(["replicate", *metric_keys])
+        for name in sorted(per_replicate):
+            writer.writerow([name, *(per_replicate[name].get(k, "") for k in metric_keys)])
+        writer.writerow(["mean", *(aggregate[k] for k in metric_keys)])
 
-# ── External pipeline (optional) ────────────────────────────────────────────
+    summary_path = os.path.join(args.output_dir, "summary.json")
+    with open(summary_path, "w") as f:
+        json.dump({"per_replicate": per_replicate, "mean": aggregate}, f, indent=2)
 
-if args.eval_pipeline:
-    print(f"\n=== External Pipeline Evaluation (5 metrics) ===")
-    assert os.path.isdir(args.eval_pipeline), f"Evaluation pipeline not found: {args.eval_pipeline}"
+    print("\n=== Mean across replicates ===")
+    for k in metric_keys:
+        print(f"  {k}: {aggregate[k]:.6f}")
+    print(f"\nSaved: {csv_path}, {summary_path}, and per-replicate JSONs in {args.output_dir}/")
 
-    cmd = [
-        sys.executable, os.path.join(args.eval_pipeline, "main.py"),
-        "--samples-batch", args.samples_dir,
-        "--data", args.data,
-        "--model", args.oracle,
-        "--model-type", "lentimpra",
-        "--test", "discriminability,predictive_dist_shift,kmer_spectrum_shift,cond_gen_fidelity,percent_identity",
-        "--output-dir", args.output_dir,
-    ]
 
-    print(f"Running: {' '.join(cmd)}\n")
-
-    metadata_csv = os.path.join(args.samples_dir, "metadata.csv")
-    if not os.path.exists(metadata_csv):
-        print("First run: creating metadata.csv template...")
-        subprocess.run(cmd, check=False)
-
-    print("Running evaluation...")
-    subprocess.run(cmd, check=True)
-
-# ── Print summary ───────────────────────────────────────────────────────────
-
-print("\n=== Results ===")
-for csv_file in sorted(os.listdir(args.output_dir)):
-    if csv_file.endswith(".csv"):
-        path = os.path.join(args.output_dir, csv_file)
-        print(f"\n{csv_file}:")
-        with open(path) as f:
-            for line in f:
-                print(f"  {line.rstrip()}")
+if __name__ == "__main__":
+    main()
