@@ -23,3 +23,11 @@ generated_*/
 eval_results/
 debug_*.py
 *.fasta
+
+# Local working notes — kept on disk, not tracked
+/EVALUATIONS.md
+/INSTALLATION.md
+/SAMPLING.md
+/ideal_use.md
+/mvp.md
+

@@ -9,6 +9,7 @@ from d3_dna.evals.metrics import (
     compute_ks_statistic,
     compute_js_divergence,
     compute_js_spectrum,
+    compute_mean_js_divergence,
     compute_auroc,
     DiscriminabilityCNN,
 )
@@ -18,6 +19,7 @@ __all__ = [
     "compute_ks_statistic",
     "compute_js_divergence",
     "compute_js_spectrum",
+    "compute_mean_js_divergence",
     "compute_auroc",
     "DiscriminabilityCNN",
 ]
