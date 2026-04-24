@@ -125,15 +125,24 @@ def example_sys_path(repo_root):
     """
     from contextlib import contextmanager
 
+    # Examples own common module names (data, oracle, callbacks) — pop them
+    # from sys.modules on enter AND exit so switching examples doesn't hit a
+    # cached copy from the previous one.
+    _SHADOWED = ("data", "oracle", "callbacks")
+
     @contextmanager
     def _ctx(example_name: str):
         path = str(repo_root / "examples" / example_name)
         inserted = path not in sys.path
         if inserted:
             sys.path.insert(0, path)
+        popped = {name: sys.modules.pop(name) for name in _SHADOWED if name in sys.modules}
         try:
             yield path
         finally:
+            for name in _SHADOWED:
+                sys.modules.pop(name, None)
+            sys.modules.update(popped)
             if inserted:
                 sys.path.remove(path)
     return _ctx
