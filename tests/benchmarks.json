@@ -1,0 +1,42 @@
+{
+  "tolerances": {
+    "fidelity_mse": 0.05,
+    "ks_statistic": 0.05,
+    "js_divergence": 0.02,
+    "auroc": 0.05
+  },
+  "sample_config": {
+    "num_samples": 512,
+    "steps_promoter": 128,
+    "steps_k562": 20,
+    "kmer_ks": [6],
+    "seed": 0,
+    "batch_size": 64
+  },
+  "checkpoints": {
+    "D3_Tran_Promoter": {
+      "fidelity_mse": null,
+      "ks_statistic": null,
+      "js_divergence": null,
+      "auroc": null
+    },
+    "D3_Conv_Promoter": {
+      "fidelity_mse": null,
+      "ks_statistic": null,
+      "js_divergence": null,
+      "auroc": null
+    },
+    "D3_Tran_MPRA_K562": {
+      "fidelity_mse": null,
+      "ks_statistic": null,
+      "js_divergence": null,
+      "auroc": null
+    },
+    "D3_Conv_MPRA_K562": {
+      "fidelity_mse": null,
+      "ks_statistic": null,
+      "js_divergence": null,
+      "auroc": null
+    }
+  }
+}

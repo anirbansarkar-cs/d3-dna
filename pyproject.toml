@@ -43,3 +43,10 @@ include = ["d3_dna*"]
 
 [tool.setuptools.package-data]
 "d3_dna" = ["*.yaml"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "gpu: requires a CUDA device",
+    "slow: long-running tests (run with --run-slow)",
+]
