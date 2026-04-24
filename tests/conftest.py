@@ -178,6 +178,7 @@ def k562_oracle(device, example_sys_path):
     shared-filesystem candidates; skips cleanly if none exist.
     """
     candidates = [
+        Path("/grid/koo/home/shared/d3/oracle_weights/lentimpra/best_model-epoch=24-val_pearson=0.814.ckpt"),
         Path("/grid/koo/home/shared/d3/oracle_weights/lentimpra/best_model_k562-epoch=15-val_pearson=0.706.ckpt"),
         Path("/grid/koo/home/shared/d3/oracle_weights/lentimpra/oracle_best_model_k562.ckpt"),
         Path("/grid/koo/home/shared/d3/oracle_weights/lentimpra/best_model_k562.ckpt"),
