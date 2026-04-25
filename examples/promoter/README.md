@@ -1,8 +1,6 @@
 # Promoter example
 
-End-to-end D3 conditional diffusion on the FANTOM5 promoter dataset: **1024 bp sequences with per-position CAGE activity labels** (shape `(N, 1024, 1)`). Two architectures are supported out of the box: a transformer (12-block DDiT, ~30M params) and a 20-block dilated convolutional model.
-
-> **Loading a pretrained hybrid SEDD checkpoint?** See [`legacy/`](legacy/). That path is sampling-only and isolated from the from-scratch training flow described here.
+End-to-end D3 conditional diffusion on the FANTOM5 promoter dataset: **1024 bp sequences with per-position CAGE activity labels** (shape `(N, 1024, 1)`). Two architectures are supported out of the box: a transformer (12-block DDiT) and a 20-block dilated convolutional model.
 
 ## Prerequisites
 
@@ -10,9 +8,7 @@ End-to-end D3 conditional diffusion on the FANTOM5 promoter dataset: **1024 bp s
 - GPU with Ampere architecture or newer if `flash-attn` is installed (H100 recommended); otherwise any CUDA GPU — the transformer falls back to PyTorch SDPA automatically.
 - `curl` on PATH (used to fetch defaults from Zenodo).
 
-**Data + oracle weights auto-download from [Zenodo record 19738941](https://zenodo.org/records/19738941) on first run** and cache under `examples/promoter/cache/` (gitignored). To use a pre-existing copy on a shared filesystem instead, pass `--data-file /path/to/Promoter_data.npz` and `--oracle-file /path/to/oracle.pth.tar` to any of the scripts.
-
-`target.sei.names` (the SEI feature mask, ~900 KB) is **not on Zenodo**. The configs default to the Koo-lab cluster path `/grid/koo/home/shared/d3/oracle_weights/promoter/target.sei.names`; on any other host pass `--sei-features /your/path/target.sei.names`.
+**Data + oracle weights auto-download from [Zenodo record 19738941](https://zenodo.org/records/19738941) on first run** and cache under `examples/promoter/cache/` (gitignored). To use a pre-existing copy on a shared filesystem instead, pass `--data-file /path/to/Promoter_data.npz` and `--oracle-file /path/to/oracle.pth.tar` to any of the scripts. Using the SEI oracle requires a feature mask (also on Zenodo and automatically downloaded.)
 
 ## Files
 
@@ -45,13 +41,6 @@ python train.py --config config_transformer.yaml \
 
 Checkpoints land in `outputs/promoter_{architecture}/checkpoints/`. `PromoterSPMSECallback` tracks SP-MSE periodically during training.
 
-Submit on SLURM (replace `<env>` and the conda init):
-
-```bash
-sbatch --partition=gpu --gres=gpu:1 --cpus-per-task=8 --mem=64G --time=24:00:00 \
-    --job-name=d3_promoter_train --wrap="source /path/to/conda.sh && conda activate <env> && python train.py"
-```
-
 ### 2. Sample
 
 ```bash
@@ -61,9 +50,9 @@ python sample.py --checkpoint outputs/promoter_transformer/checkpoints/last.ckpt
 # One sample per test-set TSS
 python sample.py --checkpoint outputs/promoter_transformer/checkpoints/last.ckpt --use-test-labels
 
-# DDSM 5-per-TSS protocol
+# n-per-TSS protocol (averaging over n samples)
 python sample.py --checkpoint outputs/promoter_transformer/checkpoints/last.ckpt \
-    --use-test-labels --paired-repeat 5
+    --use-test-labels --paired-repeat n
 ```
 
 Output: `generated/samples.npz` (one-hot `(N, 1024, 4)`) and `generated/samples.fasta`.
@@ -74,7 +63,7 @@ Output: `generated/samples.npz` (one-hot `(N, 1024, 4)`) and `generated/samples.
 # Full evaluation (MSE, KS, JS, AUROC). Default JS is single-k at k=6.
 python evaluate.py --samples generated/samples.npz
 
-# Report JS divergence averaged over k ∈ {1..7}
+# Report JS distance averaged over k ∈ {1..7}
 python evaluate.py --samples generated/samples.npz --kmer-ks 1-7
 
 # DDSM 5-per-TSS paired evaluation
@@ -82,9 +71,6 @@ python evaluate.py --samples generated/samples.npz --paired-repeat 5
 
 # Subset of metrics
 python evaluate.py --samples-dir generated --tests mse,ks
-
-# JS averaged over k ∈ {1..7} instead of single k=6
-python evaluate.py --samples-dir generated --kmer-ks 1-7
 ```
 
 `evaluate.py` loads the SEI oracle (for MSE/KS), reads the real-data NPZ (one-hot channels 0–3), and dispatches through `D3Evaluator`.
