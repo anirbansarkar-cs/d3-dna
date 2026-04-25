@@ -19,3 +19,12 @@ Use `examples/k562/` as a template — the conditioning pattern is the same (glo
 ## Floating-point precision
 
 Identical to the other examples once the pipeline is built out — see [`examples/promoter/README.md`](../promoter/README.md#floating-point-precision) for the full explanation. DeepSTARR-specific point: `oracle.py` explicitly casts its input to `torch.float32` before the forward pass, so the evaluation path stays fp32 regardless of upstream autocast context.
+
+## Reference results
+
+Mean across replicates from a separate evaluation pipeline (not yet reproducible from this directory — see "Building it out"). JS reported at single `k=6`. Lower is better on every metric except AUROC, which targets 0.5.
+
+| Architecture | `fidelity_mse` ↓ | `ks_statistic` ↓ | `js_distance` (k=6) ↓ | `auroc` (→ 0.5) |
+|---|---|---|---|---|
+| Convolutional | 1.1391 | 0.02595 | 0.03653 | 0.5798 |
+| Transformer | 1.0982 | 0.02335 | 0.03659 | 0.5978 |

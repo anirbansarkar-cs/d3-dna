@@ -137,17 +137,17 @@ Net effect: the model's *inner activations* are fp16-mixed; the *score and all p
 |---|---|---|
 | `fidelity_mse` | Paired MSE of SEI oracle predictions (real vs generated) | Lower is better |
 | `ks_statistic` | Mean per-feature two-sample KS on oracle predictions | Lower is better |
-| `js_divergence` | JS divergence of k-mer distributions. Default: single k=6. With `--kmer-ks 1-7` (or any interval/list), returns the mean over those k's. | Lower is better |
+| `js_distance` | Jensen-Shannon **distance** (sqrt of divergence; satisfies the triangle inequality) between k-mer distributions. Default: single k=6. With `--kmer-ks 1-7` (or any interval/list), returns the mean over those k's. | Lower is better |
 | `auroc` | AUROC of a CNN discriminator (real=1, gen=0) | Closer to 0.5 is better |
 
 ## Reference results
 
 Run end-to-end from the public Zenodo artifacts (`D3_Tran_Promoter.ckpt`, `D3_Conv_Promoter.ckpt`, `data_Promoter.npz`, `Oracle_Promoter.pth.tar`) on a single H100 NVL. Sampling: one sequence per TSS in the FANTOM5 test split (`--use-test-labels`, `paired_repeat=1`, **100 PC steps**). JS reported at single `k=6`. Both rows reflect the precision policy actually used to produce the public checkpoints — see "Floating-point precision" above.
 
-| Architecture | Precision (train / sample) | `fidelity_mse` ↓ | `ks_statistic` ↓ | `js_divergence` (k=6) ↓ | `auroc` (→ 0.5) |
+| Architecture | Precision (train / sample) | `fidelity_mse` ↓ | `ks_statistic` ↓ | `js_distance` (k=6) ↓ | `auroc` (→ 0.5) |
 |---|---|---|---|---|---|
-| Transformer (12-block DDiT, ~30 M) | fp16 / fp16 | 0.027365 | 0.045885 | 0.000876 | 0.560604 |
-| Convolutional (20 dilated blocks, 256 ch) | fp16 / fp16 | 0.027531 | 0.067360 | 0.000586 | 0.553784 |
+| Transformer (12-block DDiT, ~30 M) | fp16 / fp16 | 0.027365 | 0.045885 | 0.029593 | 0.560604 |
+| Convolutional (20 dilated blocks, 256 ch) | fp16 / fp16 | 0.027531 | 0.067360 | 0.024207 | 0.553784 |
 
 Reproduce with:
 

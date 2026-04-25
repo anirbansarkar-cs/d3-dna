@@ -18,3 +18,12 @@ The scripts in this directory (`train.py`, `sample.py`, `evaluate.py`) currently
 ## Floating-point precision
 
 Identical to the K562 example — see [`examples/k562/README.md`](../k562/README.md#floating-point-precision) for the per-stage summary, and [`examples/promoter/README.md`](../promoter/README.md#floating-point-precision) for the detailed narrative (fp16-mixed autocast on CUDA, LayerNorm fp32 island, score upcast to fp32 after `.exp()`, fp32 oracle forward).
+
+## Reference results
+
+Mean across replicates from a separate evaluation pipeline (not yet reproducible from this directory — see "Known issue"). JS reported at single `k=6`. Lower is better on every metric except AUROC, which targets 0.5.
+
+| Architecture | `fidelity_mse` ↓ | `ks_statistic` ↓ | `js_distance` (k=6) ↓ | `auroc` (→ 0.5) |
+|---|---|---|---|---|
+| Convolutional | 0.4683 | 0.04097 | 0.05286 | 0.7954 |
+| Transformer | 0.4445 | 0.04400 | 0.02495 | 0.6464 |

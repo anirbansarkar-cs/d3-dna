@@ -1,34 +1,18 @@
-"""Test helpers: Zenodo download."""
+"""Test helpers: thin wrapper over the public Zenodo utilities.
 
-from __future__ import annotations
+Preserves the legacy default-record behavior: tests fetch from the test
+checkpoint record without having to thread the record through fixtures.
+"""
 
-import shutil
-import subprocess
 from pathlib import Path
+
+from d3_dna.utils.zenodo import fetch_zenodo as _fetch_zenodo
 
 ZENODO_RECORD = "19488686"
 
 
-def fetch_zenodo(filename: str, dest_dir: Path, record: str = ZENODO_RECORD) -> Path:
-    """Download `filename` from Zenodo record into `dest_dir` if not already present.
+def fetch_zenodo(filename: str, dest_dir, record: str = ZENODO_RECORD) -> Path:
+    return _fetch_zenodo(filename, dest_dir, record=record)
 
-    Returns the local path. Idempotent — skips the download if a non-empty file
-    already exists at the destination.
-    """
-    dest_dir = Path(dest_dir)
-    dest_dir.mkdir(parents=True, exist_ok=True)
-    dest = dest_dir / filename
 
-    if dest.exists() and dest.stat().st_size > 0:
-        return dest
-
-    url = f"https://zenodo.org/records/{record}/files/{filename}?download=1"
-    curl = shutil.which("curl")
-    if curl is None:
-        raise RuntimeError("curl not found on PATH; cannot download Zenodo checkpoint")
-
-    tmp = dest.with_suffix(dest.suffix + ".part")
-    cmd = [curl, "--fail", "--location", "--retry", "3", "-o", str(tmp), url]
-    subprocess.run(cmd, check=True)
-    tmp.replace(dest)
-    return dest
+__all__ = ["fetch_zenodo", "ZENODO_RECORD"]

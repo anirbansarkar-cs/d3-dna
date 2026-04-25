@@ -2,7 +2,7 @@
   "tolerances": {
     "fidelity_mse": 0.05,
     "ks_statistic": 0.05,
-    "js_divergence": 0.02,
+    "js_distance": 0.05,
     "auroc": 0.05
   },
   "sample_config": {
@@ -15,27 +15,27 @@
   },
   "checkpoints": {
     "D3_Tran_Promoter": {
-      "fidelity_mse": null,
-      "ks_statistic": null,
-      "js_divergence": null,
-      "auroc": null
+      "fidelity_mse": 0.027365,
+      "ks_statistic": 0.045885,
+      "js_distance": 0.029593,
+      "auroc": 0.560604
     },
     "D3_Conv_Promoter": {
-      "fidelity_mse": null,
-      "ks_statistic": null,
-      "js_divergence": null,
-      "auroc": null
+      "fidelity_mse": 0.027531,
+      "ks_statistic": 0.067360,
+      "js_distance": 0.024207,
+      "auroc": 0.553784
     },
     "D3_Tran_MPRA_K562": {
       "fidelity_mse": null,
       "ks_statistic": null,
-      "js_divergence": null,
+      "js_distance": null,
       "auroc": null
     },
     "D3_Conv_MPRA_K562": {
       "fidelity_mse": null,
       "ks_statistic": null,
-      "js_divergence": null,
+      "js_distance": null,
       "auroc": null
     }
   }

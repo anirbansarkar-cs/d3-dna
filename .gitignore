@@ -10,19 +10,22 @@ build/
 *.h5
 *.npz
 *.pt
+*.sh
 experiments/
 outputs/
 wandb/
 lightning_logs/
 .vscode/
 .idea/
-slurm_*.out
-slurm_*.err
+*.out
+*.err
 generated/
 generated_*/
 eval_results/
+examples/*/cache/
 debug_*.py
 *.fasta
+.claude/
 
 # Local working notes — kept on disk, not tracked
 /EVALUATIONS.md

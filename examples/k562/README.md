@@ -116,3 +116,12 @@ Via `--eval-pipeline` (external `d3_evaluation_pipeline`):
 | K-mer spectrum shift | JS on k-mer frequencies | Lower is better |
 | Conditional-generation fidelity | Oracle-prediction MSE | Lower is better |
 | Percent identity | Max pairwise identity to training set | Reference |
+
+## Reference results
+
+Mean across replicates from a separate evaluation pipeline. JS reported at single `k=6`. Lower is better on every metric except AUROC, which targets 0.5.
+
+| Architecture | `fidelity_mse` ↓ | `ks_statistic` ↓ | `js_distance` (k=6) ↓ | `auroc` (→ 0.5) |
+|---|---|---|---|---|
+| Convolutional | 0.2185 | 0.05942 | 0.03671 | 0.7700 |
+| Transformer | 0.1994 | 0.00827 | 0.02684 | 0.7248 |
