@@ -1,26 +1,15 @@
-# Promoter — D3 Transformer Configuration
-# Matches the architecture used to train the promoter checkpoint.
-#
-# KEY DIFFERENCE from K562/LentiMPRA configs:
-#   This model uses PER-POSITION conditioning (signal_dim: 1 applied at every
-#   base pair position), so labels have shape (batch, seq_len, signal_dim).
-#   K562/LentiMPRA use GLOBAL conditioning where labels have shape (batch, signal_dim)
-#   and are broadcast across all positions.
-#
-#   The EmbeddingLayer handles both cases automatically based on label tensor
-#   dimensionality (2D = global, 3D = per-position).
+# Promoter — D3 Transformer (12-block DDiT, ~30M params)
 
 dataset:
   name: promoter
   sequence_length: 1024
   num_classes: 4
-  signal_dim: 1  # Per-position regulatory activity (1 value per base pair)
+  signal_dim: 1
 
 ngpus: 1
 nnodes: 1
-tokens: 4  # DNA alphabet: A, C, G, T
+tokens: 4
 
-# Model — 12-block transformer (~30M params)
 model:
   name: small
   type: ddit
@@ -34,7 +23,6 @@ model:
   dropout: 0.1
   class_dropout_prob: 0.1
 
-# Training (needed for EMA decay during checkpoint loading)
 training:
   batch_size: 128
   accum: 1
@@ -45,8 +33,12 @@ training:
   weight: standard
   snapshot_sampling: true
   ema: 0.9999
+  # PROMOTER EXCEPTION: override the package default (bf16-mixed for transformers).
+  # The Zenodo D3_Tran_Promoter.ckpt was trained / validated under fp16; sampling
+  # in bf16 produces materially worse outputs (auroc≈1.0). All other transformer
+  # examples should keep the bf16-mixed default. See README "Floating-point precision".
+  precision: 16-mixed
 
-# Optimizer
 optim:
   optimizer: AdamW
   lr: 0.0003
@@ -57,7 +49,6 @@ optim:
   warmup: 2500
   grad_clip: 1.0
 
-# Diffusion process
 graph:
   type: uniform
   file: data
@@ -68,26 +59,32 @@ noise:
   sigma_min: 0.0001
   sigma_max: 20
 
-# Sampling
 sampling:
-  predictor: euler
   steps: 128
+  num_samples: 10
+  batch_size: 64
+  paired_repeat: 1
+  predictor: euler
   noise_removal: true
 
-# Evaluation
 eval:
   batch_size: 512
   perplexity: false
   perplexity_batch_size: 32
 
-# Logging (disabled by default)
 wandb:
   enabled: false
   project: d3-promoter
   name: promoter-transformer
 
-# Paths — update these to match your local setup
-paths:
-  data_file: /grid/koo/home/shared/d3/data/promoter/Promoter_data.npz
-  oracle_model: /grid/koo/home/shared/d3/oracle_weights/promoter/best.sei.model.pth.tar
+# Default data + oracle pulled from https://zenodo.org/records/19738941 .
+# Override at the CLI (--data-file / --oracle-file) or set data.cache_dir to
+# point at a pre-populated directory. Files are cached under cache/ (gitignored).
+data:
+  zenodo_record: "19738941"
+  data_file: data_Promoter.npz
+  oracle_model: Oracle_Promoter.pth.tar
+  checkpoint: D3_Tran_Promoter.ckpt
+  # sei_features is NOT on Zenodo — hardcoded cluster path; override with --sei-features.
   sei_features: /grid/koo/home/shared/d3/oracle_weights/promoter/target.sei.names
+  cache_dir: cache

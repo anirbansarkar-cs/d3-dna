@@ -1,0 +1,47 @@
+==[Sat Apr 25 16:37:11 EDT 2026]== sample (transformer, bf16, 100 steps, paired_repeat=1, --use-test-labels)
+Using checkpoint: /grid/koo/home/duran/d3-dna/examples/promoter/cache/D3_Tran_Promoter.ckpt
+Using test set labels: 7497 samples (paired_repeat=1), shape torch.Size([7497, 1024, 1])
+Loading checkpoint: /grid/koo/home/duran/d3-dna/examples/promoter/cache/D3_Tran_Promoter.ckpt
+Generating 7497 sequences in batches of 64 (len=1024, steps=100)
+Saved 7497 sequences:
+  NPZ:   generated_zenodo_tran/samples.npz shape=(7497, 1024, 4)
+  FASTA: generated_zenodo_tran/samples.fasta
+==[Sat Apr 25 16:56:43 EDT 2026]== evaluate (mse, ks, js, auroc)
+Found 2 sample file(s) in generated_zenodo_tran
+
+=== sample ===
+[eval] real=(7497, 4, 1024) gen=(7497, 4, 1024)
+[oracle] predicting on real...
+[oracle] predicting on generated...
+=== mse ===
+  fidelity_mse: 0.027365
+=== ks ===
+  ks_statistic: 0.045885
+=== js ===
+  js_divergence (k=6): 0.000876
+=== auroc ===
+  auroc: 0.560777
+saved -> eval_zenodo_tran/sample.json
+
+=== samples ===
+[eval] real=(7497, 4, 1024) gen=(7497, 4, 1024)
+[oracle] predicting on real...
+[oracle] predicting on generated...
+=== mse ===
+  fidelity_mse: 0.027365
+=== ks ===
+  ks_statistic: 0.045885
+=== js ===
+  js_divergence (k=6): 0.000876
+=== auroc ===
+  auroc: 0.560432
+saved -> eval_zenodo_tran/samples.json
+
+=== Mean across replicates ===
+  auroc: 0.560604
+  fidelity_mse: 0.027365
+  js_divergence: 0.000876
+  ks_statistic: 0.045885
+
+Saved: eval_zenodo_tran/summary.csv, eval_zenodo_tran/summary.json, and per-replicate JSONs in eval_zenodo_tran/
+==[Sat Apr 25 16:58:33 EDT 2026]== done
