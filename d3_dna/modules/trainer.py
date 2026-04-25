@@ -29,6 +29,7 @@ torch.set_float32_matmul_precision('medium')
 from d3_dna.models.ema import ExponentialMovingAverage
 from d3_dna.models import TransformerModel, ConvolutionalModel
 from d3_dna.models.diffusion import get_graph, get_noise, get_score_fn
+from d3_dna.modules.precision import precision_for_cfg
 from d3_dna.modules.checkpoint import load_config
 
 
@@ -36,8 +37,12 @@ from d3_dna.modules.checkpoint import load_config
 # TRAINING-MECHANIC FACTORIES
 # =============================================================================
 
-def get_loss_fn(noise, graph, train, sampling_eps=1e-3, lv=False, sc=False):
-    """Build the diffusion training-loss closure."""
+def get_loss_fn(noise, graph, train, sampling_eps=1e-3, lv=False, sc=False, dtype=torch.float16):
+    """Build the diffusion training-loss closure.
+
+    ``dtype`` flows into the autocast block inside ``get_score_fn`` so the
+    same precision policy applies on both the train and validation paths.
+    """
 
     def loss_fn(model, batch, labels=None, cond=None, t=None, perturbed_batch=None):
         if t is None:
@@ -51,7 +56,7 @@ def get_loss_fn(noise, graph, train, sampling_eps=1e-3, lv=False, sc=False):
         if perturbed_batch is None:
             perturbed_batch = graph.sample_transition(batch, sigma[:, None])
 
-        log_score_fn = get_score_fn(model, train=train, sampling=False)
+        log_score_fn = get_score_fn(model, train=train, sampling=False, dtype=dtype)
         log_score = log_score_fn(perturbed_batch, sigma, labels)
 
         if sc:
@@ -224,8 +229,10 @@ class D3LightningModule(pl.LightningModule):
             for i, shadow_param in enumerate(self.ema.shadow_params):
                 self.ema.shadow_params[i] = shadow_param.to(self.device)
 
+        _, autocast_dtype = precision_for_cfg(self.cfg)
         self.loss_fn = get_loss_fn(
-            self.noise, self.graph, train=True, sampling_eps=self.sampling_eps
+            self.noise, self.graph, train=True,
+            sampling_eps=self.sampling_eps, dtype=autocast_dtype,
         )
 
     def process_batch(self, batch):
@@ -266,8 +273,10 @@ class D3LightningModule(pl.LightningModule):
             self.ema.store(self.score_model.parameters())
             self.ema.copy_to(self.score_model.parameters())
 
+        _, autocast_dtype = precision_for_cfg(self.cfg)
         eval_loss_fn = get_loss_fn(
-            self.noise, self.graph, train=False, sampling_eps=self.sampling_eps
+            self.noise, self.graph, train=False,
+            sampling_eps=self.sampling_eps, dtype=autocast_dtype,
         )
 
         with torch.no_grad():
@@ -446,11 +455,12 @@ class D3Trainer:
             'log_every_n_steps': self.cfg.training.get('log_freq', 50),
             'check_val_every_n_epoch': self.cfg.training.get('val_every_n_epochs', 4),
             'accumulate_grad_batches': self.cfg.training.accum,
-            # fp16-mixed matches the fp16 autocast in get_score_fn (d3_dna/models/
-            # diffusion.py) that the training loss path also goes through. Lightning
-            # installs a GradScaler for '16-mixed' (needed for fp16 gradient stability)
-            # but not for 'bf16-mixed'.
-            'precision': '16-mixed',
+            # Precision is picked per-architecture (transformer -> bf16-mixed,
+            # convolutional -> 16-mixed) and matches the autocast dtype that
+            # get_score_fn uses on both the loss and sampling paths. Override
+            # via cfg.training.precision. Lightning installs a GradScaler for
+            # '16-mixed' but not for 'bf16-mixed'.
+            'precision': precision_for_cfg(self.cfg)[0],
             'gradient_clip_val': self.cfg.optim.grad_clip if self.cfg.optim.grad_clip >= 0 else None,
             'enable_checkpointing': True,
             'enable_progress_bar': True,
