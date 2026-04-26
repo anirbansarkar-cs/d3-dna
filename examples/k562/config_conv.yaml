@@ -1,31 +1,24 @@
-# K562 LentIMPRA — D3 Transformer Configuration
-# Matches the architecture and hyperparameters from the published D3 model.
+# K562 LentiMPRA — Pure Convolutional (dilated conv blocks, 256 channels)
 
 dataset:
   name: lentimpra
   sequence_length: 230
   num_classes: 4
-  signal_dim: 1  # Single regression target (regulatory activity)
+  signal_dim: 1  # Single global regression target (regulatory activity)
 
-ngpus: 2
+ngpus: 1
 nnodes: 1
-tokens: 4  # DNA alphabet: A, C, G, T
+tokens: 4
 
-# Model — 12-block transformer (~30M params)
 model:
-  name: small
-  type: ddit
-  architecture: transformer
-  hidden_size: 768
+  name: conv
+  type: conv
+  architecture: convolutional
+  conv_channels: 256
   cond_dim: 128
   length: 230
-  n_blocks: 12
-  n_heads: 12
   scale_by_sigma: false
-  dropout: 0.1
-  class_dropout_prob: 0.1
 
-# Training
 training:
   batch_size: 256
   accum: 1
@@ -37,7 +30,6 @@ training:
   snapshot_sampling: true
   ema: 0.9999
 
-# Optimizer
 optim:
   optimizer: AdamW
   lr: 0.0003
@@ -48,7 +40,6 @@ optim:
   warmup: 2500
   grad_clip: 1.0
 
-# Diffusion process
 graph:
   type: uniform
   file: data
@@ -59,25 +50,29 @@ noise:
   sigma_min: 0.0001
   sigma_max: 20
 
-# Sampling
 sampling:
+  steps: 20
+  num_samples: 128
+  batch_size: 256
   predictor: euler
-  steps: 128
   noise_removal: true
 
-# Evaluation
 eval:
   batch_size: 256
   perplexity: false
   perplexity_batch_size: 32
 
-# Logging (disabled by default — set enabled: true to use wandb)
 wandb:
   enabled: false
   project: d3-lentimpra
-  name: k562-transformer
+  name: k562-conv
 
-# Paths — update these to match your local setup
-paths:
-  data_file: data/lenti_MPRA_K562_data.h5
-  oracle_model: data/oracle_best_model.ckpt
+# Default data + oracle + checkpoint pulled from https://zenodo.org/records/19774653 .
+# Override at the CLI (--data-file / --oracle-file / --checkpoint) or set
+# data.cache_dir to point at a pre-populated directory. Files cache under cache/ (gitignored).
+data:
+  zenodo_record: "19774653"
+  data_file: data_MPRA_K562.h5
+  oracle_model: Oracle_MPRA_K562.ckpt
+  checkpoint: D3_Conv_MPRA_K562.ckpt
+  cache_dir: cache

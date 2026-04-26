@@ -482,7 +482,6 @@ from tqdm import tqdm
 
 INPUT_LEN = 4096
 N_FEATURES = 21907
-DEFAULT_TARGET_NAMES = "/grid/koo/home/shared/d3/oracle_weights/promoter/target.sei.names"
 MASK_LABEL = "H3K4me3"
 EXPECTED_MASK_SIZE = 2350
 
@@ -545,7 +544,9 @@ class SeiOracle:
         return np.concatenate(out, axis=0)  # (N, 1)
 
 
-def load(checkpoint_path, device, target_names_path=None):
+def load(checkpoint_path, device, target_names_path):
+    """Load the SEI oracle. `target_names_path` is required — pass the
+    vendored examples/promoter/target.sei.names (resolved via data.get_sei_features_file)."""
     sei = Sei(INPUT_LEN, N_FEATURES)
     model = NonStrandSpecific(sei)
     ckpt = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
@@ -558,6 +559,6 @@ def load(checkpoint_path, device, target_names_path=None):
     prefix = re.compile(r"^module\.")
     sd = {prefix.sub("", k): v for k, v in sd.items()}
     model.load_state_dict(sd, strict=False)
-    mask = _load_h3k4me3_mask(target_names_path or DEFAULT_TARGET_NAMES)
+    mask = _load_h3k4me3_mask(target_names_path)
     model = model.to(device).eval()
     return SeiOracle(model, device, mask)

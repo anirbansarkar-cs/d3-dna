@@ -51,8 +51,11 @@ noise:
   sigma_max: 20
 
 sampling:
-  predictor: euler
   steps: 128
+  num_samples: 128
+  batch_size: 64
+  paired_repeat: 1
+  predictor: euler
   noise_removal: true
 
 eval:
@@ -65,7 +68,14 @@ wandb:
   project: d3-promoter
   name: promoter-conv
 
-paths:
-  data_file: /grid/koo/home/shared/d3/data/promoter/Promoter_data.npz
-  oracle_model: /grid/koo/home/shared/d3/oracle_weights/promoter/best.sei.model.pth.tar
+# Default data + oracle pulled from https://zenodo.org/records/19774653 .
+# Override at the CLI (--data-file / --oracle-file) or set data.cache_dir to
+# point at a pre-populated directory. Files are cached under cache/ (gitignored).
+data:
+  zenodo_record: "19774653"
+  data_file: data_Promoter.npz
+  oracle_model: Oracle_Promoter.pth.tar
+  checkpoint: D3_Conv_Promoter.ckpt
+  # sei_features is NOT on Zenodo — hardcoded cluster path; override with --sei-features.
   sei_features: /grid/koo/home/shared/d3/oracle_weights/promoter/target.sei.names
+  cache_dir: cache

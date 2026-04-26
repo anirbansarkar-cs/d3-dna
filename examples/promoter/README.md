@@ -1,15 +1,14 @@
 # Promoter example
 
-End-to-end D3 conditional diffusion on the FANTOM5 promoter dataset: **1024 bp sequences with per-position CAGE activity labels** (shape `(N, 1024, 1)`). Two architectures are supported out of the box: a transformer (12-block DDiT, ~30M params) and a 20-block dilated convolutional model.
-
-> **Loading a pretrained hybrid SEDD checkpoint?** See [`legacy/`](legacy/). That path is sampling-only and isolated from the from-scratch training flow described here.
+End-to-end D3 conditional diffusion on the FANTOM5 promoter dataset: **1024 bp sequences with per-position CAGE activity labels** (shape `(N, 1024, 1)`). Two architectures are supported out of the box: a transformer (12-block DDiT) and a 20-block dilated convolutional model.
 
 ## Prerequisites
 
 - `d3-dna` installed from source (the package isn't on PyPI yet).
 - GPU with Ampere architecture or newer if `flash-attn` is installed (H100 recommended); otherwise any CUDA GPU — the transformer falls back to PyTorch SDPA automatically.
-- Promoter NPZ at `paths.data_file` (default: `/grid/koo/home/shared/d3/data/promoter/Promoter_data.npz`).
-- SEI oracle checkpoint at `paths.oracle_model` (default: `/grid/koo/home/shared/d3/oracle_weights/promoter/best.sei.model.pth.tar`).
+- `curl` on PATH (used to fetch defaults from Zenodo).
+
+**Data + oracle weights auto-download from [Zenodo record 19738941](https://zenodo.org/records/19738941) on first run** and cache under `examples/promoter/cache/` (gitignored). To use a pre-existing copy on a shared filesystem instead, pass `--data-file /path/to/Promoter_data.npz` and `--oracle-file /path/to/oracle.pth.tar` to any of the scripts. Using the SEI oracle requires a feature mask (also on Zenodo and automatically downloaded.)
 
 ## Files
 
@@ -29,25 +28,18 @@ End-to-end D3 conditional diffusion on the FANTOM5 promoter dataset: **1024 bp s
 ### 1. Train
 
 ```bash
-# Transformer (default)
-python train.py
+# Transformer
+python train.py --config config_transformer.yaml
 
 # Convolutional
-python train.py --config config_conv.yaml --work-dir outputs/promoter_conv
+python train.py --config config_conv.yaml --output-dir outputs/promoter_conv
 
 # Resume
 python train.py --config config_transformer.yaml \
-    --resume outputs/promoter_transformer/checkpoints/last.ckpt
+    --resume-from outputs/promoter_transformer/checkpoints/last.ckpt
 ```
 
 Checkpoints land in `outputs/promoter_{architecture}/checkpoints/`. `PromoterSPMSECallback` tracks SP-MSE periodically during training.
-
-Submit on SLURM (replace `<env>` and the conda init):
-
-```bash
-sbatch --partition=gpu --gres=gpu:1 --cpus-per-task=8 --mem=64G --time=24:00:00 \
-    --job-name=d3_promoter_train --wrap="source /path/to/conda.sh && conda activate <env> && python train.py"
-```
 
 ### 2. Sample
 
@@ -58,9 +50,9 @@ python sample.py --checkpoint outputs/promoter_transformer/checkpoints/last.ckpt
 # One sample per test-set TSS
 python sample.py --checkpoint outputs/promoter_transformer/checkpoints/last.ckpt --use-test-labels
 
-# DDSM 5-per-TSS protocol
+# n-per-TSS protocol (averaging over n samples)
 python sample.py --checkpoint outputs/promoter_transformer/checkpoints/last.ckpt \
-    --use-test-labels --paired-repeat 5
+    --use-test-labels --paired-repeat n
 ```
 
 Output: `generated/samples.npz` (one-hot `(N, 1024, 4)`) and `generated/samples.fasta`.
@@ -71,7 +63,7 @@ Output: `generated/samples.npz` (one-hot `(N, 1024, 4)`) and `generated/samples.
 # Full evaluation (MSE, KS, JS, AUROC). Default JS is single-k at k=6.
 python evaluate.py --samples generated/samples.npz
 
-# Report JS divergence averaged over k ∈ {1..7}
+# Report JS distance averaged over k ∈ {1..7}
 python evaluate.py --samples generated/samples.npz --kmer-ks 1-7
 
 # DDSM 5-per-TSS paired evaluation
@@ -79,9 +71,6 @@ python evaluate.py --samples generated/samples.npz --paired-repeat 5
 
 # Subset of metrics
 python evaluate.py --samples-dir generated --tests mse,ks
-
-# JS averaged over k ∈ {1..7} instead of single k=6
-python evaluate.py --samples-dir generated --kmer-ks 1-7
 ```
 
 `evaluate.py` loads the SEI oracle (for MSE/KS), reads the real-data NPZ (one-hot channels 0–3), and dispatches through `D3Evaluator`.
@@ -98,6 +87,15 @@ sbatch --partition=gpu --gres=gpu:1 --cpus-per-task=8 --mem=64G --time=04:00:00 
 Unlike K562/LentiMPRA (single scalar per sequence), promoter labels are **per-position** with shape `(batch, 1024, 1)`. The core `EmbeddingLayer` auto-detects the 3D label tensor and adds it element-wise rather than broadcasting. No config flag controls this — it's determined by the label tensor dimensionality.
 
 ## Floating-point precision
+
+> **Promoter exception.** The package default is `bf16-mixed` for transformer
+> architectures and `16-mixed` (fp16 + GradScaler) for convolutional. Promoter
+> overrides the transformer side back to `16-mixed` via `cfg.training.precision`
+> in `config_transformer.yaml` because the Zenodo `D3_Tran_Promoter.ckpt` was
+> trained / validated under fp16; sampling it in bf16 produces materially
+> degraded outputs (we observed AUROC ≈ 1.0 vs ≈ 0.55 in fp16). This exception
+> is local to promoter — k562, deepstarr, hepg2 etc. should keep the
+> architecture-driven default.
 
 The d3-dna core pipeline is identical across every example in this repo — the precision story below applies to the promoter example in particular but also matches k562, hepg2, deepstarr, and minimal unchanged.
 
@@ -125,5 +123,22 @@ Net effect: the model's *inner activations* are fp16-mixed; the *score and all p
 |---|---|---|
 | `fidelity_mse` | Paired MSE of SEI oracle predictions (real vs generated) | Lower is better |
 | `ks_statistic` | Mean per-feature two-sample KS on oracle predictions | Lower is better |
-| `js_divergence` | JS divergence of k-mer distributions. Default: single k=6. With `--kmer-ks 1-7` (or any interval/list), returns the mean over those k's. | Lower is better |
+| `js_distance` | Jensen-Shannon **distance** (sqrt of divergence; satisfies the triangle inequality) between k-mer distributions. Default: single k=6. With `--kmer-ks 1-7` (or any interval/list), returns the mean over those k's. | Lower is better |
 | `auroc` | AUROC of a CNN discriminator (real=1, gen=0) | Closer to 0.5 is better |
+
+## Reference results
+
+Run end-to-end from the public Zenodo artifacts (`D3_Tran_Promoter.ckpt`, `D3_Conv_Promoter.ckpt`, `data_Promoter.npz`, `Oracle_Promoter.pth.tar`) on a single H100 NVL. Sampling: one sequence per TSS in the FANTOM5 test split (`--use-test-labels`, `paired_repeat=1`, **100 PC steps**). JS reported at single `k=6`. Both rows reflect the precision policy actually used to produce the public checkpoints — see "Floating-point precision" above.
+
+| Architecture | Precision (train / sample) | `fidelity_mse` ↓ | `ks_statistic` ↓ | `js_distance` (k=6) ↓ | `auroc` (→ 0.5) |
+|---|---|---|---|---|---|
+| Transformer (12-block DDiT, ~30 M) | fp16 / fp16 | 0.027365 | 0.045885 | 0.029593 | 0.560604 |
+| Convolutional (20 dilated blocks, 256 ch) | fp16 / fp16 | 0.027531 | 0.067360 | 0.024207 | 0.553784 |
+
+Reproduce with:
+
+```bash
+python sample.py   --config config_transformer.yaml --use-test-labels --steps 100
+python evaluate.py --config config_transformer.yaml --samples-dir generated --kmer-ks 6
+# (and the same with --config config_conv.yaml)
+```
