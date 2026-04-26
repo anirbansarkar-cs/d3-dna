@@ -23,6 +23,9 @@ generated/
 generated_*/
 eval_results/
 examples/*/cache/
+examples/promoter/eval_external_*/
+examples/promoter/eval_zenodo_*/
+examples/promoter/legacy/
 debug_*.py
 *.fasta
 .claude/
