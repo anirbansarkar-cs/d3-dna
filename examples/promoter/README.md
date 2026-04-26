@@ -8,9 +8,7 @@ End-to-end D3 conditional diffusion on the FANTOM5 promoter dataset: **1024 bp s
 - GPU with Ampere architecture or newer if `flash-attn` is installed (H100 recommended); otherwise any CUDA GPU — the transformer falls back to PyTorch SDPA automatically.
 - `curl` on PATH (used to fetch defaults from Zenodo).
 
-=======
 **Data + oracle weights auto-download from [Zenodo record 19738941](https://zenodo.org/records/19738941) on first run** and cache under `examples/promoter/cache/` (gitignored). To use a pre-existing copy on a shared filesystem instead, pass `--data-file /path/to/Promoter_data.npz` and `--oracle-file /path/to/oracle.pth.tar` to any of the scripts. Using the SEI oracle requires a feature mask (also on Zenodo and automatically downloaded.)
->>>>>>> 151f4f302049c83f103df319ac6b11e3055e5c32
 
 ## Files
 
