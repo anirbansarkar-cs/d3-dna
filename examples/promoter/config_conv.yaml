@@ -68,11 +68,11 @@ wandb:
   project: d3-promoter
   name: promoter-conv
 
-# Default data + oracle pulled from https://zenodo.org/records/19738941 .
+# Default data + oracle pulled from https://zenodo.org/records/19774653 .
 # Override at the CLI (--data-file / --oracle-file) or set data.cache_dir to
 # point at a pre-populated directory. Files are cached under cache/ (gitignored).
 data:
-  zenodo_record: "19738941"
+  zenodo_record: "19774653"
   data_file: data_Promoter.npz
   oracle_model: Oracle_Promoter.pth.tar
   checkpoint: D3_Conv_Promoter.ckpt

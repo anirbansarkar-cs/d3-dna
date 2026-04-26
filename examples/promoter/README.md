@@ -10,7 +10,7 @@ End-to-end D3 conditional diffusion on the FANTOM5 promoter dataset: **1024 bp s
 - GPU with Ampere architecture or newer if `flash-attn` is installed (H100 recommended); otherwise any CUDA GPU — the transformer falls back to PyTorch SDPA automatically.
 - `curl` on PATH (used to fetch defaults from Zenodo).
 
-**Data + oracle weights auto-download from [Zenodo record 19738941](https://zenodo.org/records/19738941) on first run** and cache under `examples/promoter/cache/` (gitignored). To use a pre-existing copy on a shared filesystem instead, pass `--data-file /path/to/Promoter_data.npz` and `--oracle-file /path/to/oracle.pth.tar` to any of the scripts.
+**Data + oracle weights auto-download from [Zenodo record 19774653](https://zenodo.org/records/19774653) on first run** and cache under `examples/promoter/cache/` (gitignored). To use a pre-existing copy on a shared filesystem instead, pass `--data-file /path/to/Promoter_data.npz` and `--oracle-file /path/to/oracle.pth.tar` to any of the scripts.
 
 `target.sei.names` (the SEI feature mask, ~900 KB) is **not on Zenodo**. The configs default to the Koo-lab cluster path `/grid/koo/home/shared/d3/oracle_weights/promoter/target.sei.names`; on any other host pass `--sei-features /your/path/target.sei.names`.
 

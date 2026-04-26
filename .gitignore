@@ -28,6 +28,7 @@ examples/promoter/eval_zenodo_*/
 examples/promoter/legacy/
 debug_*.py
 *.fasta
+.json
 .claude/
 
 # Local working notes — kept on disk, not tracked
