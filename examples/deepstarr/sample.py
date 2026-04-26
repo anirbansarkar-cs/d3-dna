@@ -1,17 +1,18 @@
 """
-Generate sequences from a trained K562 LentiMPRA checkpoint.
+Generate sequences from a trained DeepSTARR checkpoint.
 
-Defaults: conditions on the test-set activity labels (`--use-test-labels`); to
-generate from random scalar labels instead, pass `--random-labels`. This inverts
-the promoter convention because K562's labels are a single global scalar — random
-Gaussians are arbitrary, so test-conditioned is the natural default.
+Defaults: conditions on the test-set [dev, hk] activity labels (`--use-test-labels`);
+to generate from random Gaussian dual-head labels instead, pass `--random-labels`.
+This inverts the promoter convention because DeepSTARR's labels are global scalars
+(per head) — random Gaussians are arbitrary, so test-conditioned is the natural
+default.
 
 Usage:
     # Default: condition on test labels, 5 replicates × N_test sequences
     python sample.py
 
-    # Conv backbone, explicit checkpoint
-    python sample.py --config config_conv.yaml --checkpoint /path/to/conv.ckpt
+    # Conv backbone (.pth Zenodo checkpoint)
+    python sample.py --config config_conv.yaml
 
     # Random scalar labels
     python sample.py --random-labels --num-samples 1000
@@ -35,7 +36,7 @@ from omegaconf import OmegaConf
 
 from d3_dna import D3Sampler
 from d3_dna.models import TransformerModel, ConvolutionalModel
-from data import K562Dataset, get_data_file, get_checkpoint_file
+from data import DeepSTARRDataset, get_data_file, get_checkpoint_file
 
 
 def main(
@@ -70,8 +71,8 @@ def main(
 
     if use_test_labels:
         data_path = get_data_file(cfg, override=data_file)
-        test_ds = K562Dataset(data_path, split="test")
-        labels = test_ds.y  # (N_test, 1)
+        test_ds = DeepSTARRDataset(data_path, split="test")
+        labels = test_ds.y  # (N_test, 2)
         n = len(labels)
         print(f"Using test set labels: {n} samples, shape {labels.shape}")
     else:
@@ -102,7 +103,7 @@ def main(
             steps=cfg.sampling.steps,
         )
 
-        onehot = F.one_hot(seqs.long(), num_classes=4).float().numpy()  # (N, 230, 4)
+        onehot = F.one_hot(seqs.long(), num_classes=4).float().numpy()  # (N, 249, 4)
         npz_path = os.path.join(output_dir, f"sample_{rep}.npz")
         np.savez(npz_path, arr_0=onehot)
 
@@ -123,7 +124,7 @@ if __name__ == "__main__":
     label_group = p.add_mutually_exclusive_group()
     label_group.add_argument("--use-test-labels", dest="use_test_labels",
                              action="store_true", default=True,
-                             help="Condition on K562 test-set activity labels (default)")
+                             help="Condition on DeepSTARR test-set [dev, hk] labels (default)")
     label_group.add_argument("--random-labels", dest="use_test_labels",
                              action="store_false",
                              help="Condition on random scalar labels instead of test labels")

@@ -1,11 +1,11 @@
 """
-Train a D3 model on HepG2 LentiMPRA sequences with SP-MSE validation.
+Train a D3 model on DeepSTARR Drosophila enhancer sequences with SP-MSE validation.
 
 Usage:
     python train.py --config config_transformer.yaml
-    python train.py --config config_conv.yaml --output-dir outputs/hepg2_conv
+    python train.py --config config_conv.yaml --output-dir outputs/deepstarr_conv
     python train.py --config config_transformer.yaml \\
-        --resume-from outputs/hepg2_transformer/checkpoints/last.ckpt
+        --resume-from outputs/deepstarr_transformer/checkpoints/last.ckpt
 
 Importable:
     from train import main
@@ -18,8 +18,8 @@ from typing import Optional
 from omegaconf import OmegaConf
 
 from d3_dna import D3Trainer
-from data import HepG2Dataset, get_data_file, get_oracle_file
-from callbacks import HepG2MSECallback
+from data import DeepSTARRDataset, get_data_file, get_oracle_file
+from callbacks import DeepSTARRSPMSECallback
 
 
 def main(
@@ -34,12 +34,12 @@ def main(
     data_path = get_data_file(cfg, override=data_file)
     oracle_path = get_oracle_file(cfg, override=oracle_file)
 
-    train_ds = HepG2Dataset(data_path, split="train")
-    val_ds = HepG2Dataset(data_path, split="valid")
+    train_ds = DeepSTARRDataset(data_path, split="train")
+    val_ds = DeepSTARRDataset(data_path, split="valid")
     print(f"Train: {len(train_ds)} sequences, Val: {len(val_ds)} sequences")
 
     validation_samples = 500 if cfg.model.architecture == "transformer" else 1000
-    sp_mse_callback = HepG2MSECallback(
+    sp_mse_callback = DeepSTARRSPMSECallback(
         oracle_path=str(oracle_path),
         data_path=str(data_path),
         validation_freq_epochs=cfg.training.get("val_every_n_epochs", 4),
@@ -47,7 +47,7 @@ def main(
         sampling_steps=20,
     )
 
-    work_dir = output_dir or f"train_experiments/hepg2_{cfg.model.architecture}"
+    work_dir = output_dir or f"train_experiments/deepstarr_{cfg.model.architecture}"
     trainer = D3Trainer(cfg, work_dir=work_dir, callbacks=[sp_mse_callback])
     trainer.fit(train_ds, val_ds, resume_from=resume_from)
 

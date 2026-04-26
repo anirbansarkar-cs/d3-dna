@@ -1,11 +1,12 @@
-"""Evaluate generated HepG2 sequences against the real test split.
+"""Evaluate generated DeepSTARR sequences against the real test split.
 
-Owns everything HepG2-specific:
-    * loading the H5 real-data layout (onehot_test -> (N, 4, 230))
-    * loading the LegNet oracle
+Owns everything DeepSTARR-specific:
+    * loading the H5 real-data layout (onehot_test -> (N, 4, 249))
+    * loading the DeepSTARR CNN oracle (dual-head: dev, hk)
     * iterating over sample replicates (sample_*.npz or samples.npz) in --samples-dir
 
-Delegates the metric math to d3_dna.D3Evaluator.
+Delegates the metric math to d3_dna.D3Evaluator. The MSE/KS metrics naturally
+compose over the 2-D oracle output (mean reduces over the 2 heads).
 
 Data + oracle weights resolve through data.py: CLI override > local cache >
 download from Zenodo.
@@ -34,14 +35,17 @@ from omegaconf import OmegaConf
 
 from d3_dna import D3Evaluator
 from data import get_data_file, get_oracle_file
-from oracle import load as load_legnet_oracle
+from oracle import load as load_deepstarr_oracle
 
 
-def _load_hepg2_real(h5_path: str) -> np.ndarray:
-    """Load the HepG2 test split one-hot (N, 4, 230) from the H5 file."""
+def _load_deepstarr_real(h5_path: str) -> np.ndarray:
+    """Load the DeepSTARR test split one-hot (N, 4, 249) from the H5 file.
+
+    The Zenodo H5 already stores X_* in NCHW; no transpose needed.
+    """
     with h5py.File(h5_path, "r") as f:
-        onehot = np.array(f["onehot_test"])  # (N, 230, 4)
-    return np.transpose(onehot, (0, 2, 1)).astype(np.float32)
+        x = np.array(f["X_test"])  # (N, 4, 249) float32
+    return x.astype(np.float32)
 
 
 def parse_ks(spec: str):
@@ -76,13 +80,13 @@ def main(
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
     data_path = get_data_file(cfg, override=data_file)
-    real = _load_hepg2_real(str(data_path))
-    print(f"[hepg2] real test split: shape={real.shape}")
+    real = _load_deepstarr_real(str(data_path))
+    print(f"[deepstarr] real test split: shape={real.shape}")
 
     oracle = None
     if any(t in ("mse", "ks") for t in test_list):
         oracle_path = get_oracle_file(cfg, override=oracle_file)
-        oracle = load_legnet_oracle(str(oracle_path), device)
+        oracle = load_deepstarr_oracle(str(oracle_path), device)
 
     ev = D3Evaluator(tests=test_list, device=device)
 
@@ -126,7 +130,7 @@ def main(
 
 
 if __name__ == "__main__":
-    p = argparse.ArgumentParser(description="Evaluate generated HepG2 sequences via D3Evaluator")
+    p = argparse.ArgumentParser(description="Evaluate generated DeepSTARR sequences via D3Evaluator")
     p.add_argument("--samples-dir", default="generated",
                    help="Directory containing sample*.npz replicates")
     p.add_argument("--config", default="config_transformer.yaml")

@@ -1,0 +1,79 @@
+# Template — D3 Convolutional config for a new dataset.
+# Same structure as config_transformer.yaml; only the model: block + checkpoint
+# filename differ. Compare against examples/k562/config_conv.yaml.
+
+dataset:
+  name: TODO
+  sequence_length: 0    # TODO
+  num_classes: 4
+  signal_dim: 1         # TODO
+
+ngpus: 1
+nnodes: 1
+tokens: 4
+
+model:
+  name: conv
+  type: conv
+  architecture: convolutional
+  conv_channels: 256
+  cond_dim: 128
+  length: 0             # TODO: must equal dataset.sequence_length
+  scale_by_sigma: false
+
+training:
+  batch_size: 256
+  accum: 1
+  max_epochs: 300
+  checkpoint_every_n_epochs: 4
+  log_freq: 500
+  val_every_n_epochs: 4
+  weight: standard
+  snapshot_sampling: true
+  ema: 0.9999
+  # Default precision for convolutional is 16-mixed (fp16 + GradScaler) — leave
+  # this section as-is unless you know your checkpoint needs a different policy.
+
+optim:
+  optimizer: AdamW
+  lr: 0.0003
+  beta1: 0.9
+  beta2: 0.999
+  eps: 1.0e-08
+  weight_decay: 0
+  warmup: 2500
+  grad_clip: 1.0
+
+graph:
+  type: uniform
+  file: data
+  report_all: false
+
+noise:
+  type: geometric
+  sigma_min: 0.0001
+  sigma_max: 20
+
+sampling:
+  steps: 20
+  num_samples: 128
+  batch_size: 256
+  predictor: euler
+  noise_removal: true
+
+eval:
+  batch_size: 256
+  perplexity: false
+  perplexity_batch_size: 32
+
+wandb:
+  enabled: false
+  project: d3-TODO
+  name: TODO-conv
+
+data:
+  zenodo_record: "TODO"
+  data_file: TODO
+  oracle_model: TODO
+  checkpoint: TODO         # e.g. D3_Conv_MyDataset.ckpt or .pth (legacy SEDD)
+  cache_dir: cache

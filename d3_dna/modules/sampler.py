@@ -12,6 +12,7 @@ import torch
 
 from d3_dna.models.diffusion import get_pc_sampler
 from d3_dna.modules.checkpoint import load_config, load_checkpoint
+from d3_dna.modules.precision import autocast_dtype_for_cfg
 from d3_dna.utils.dna import sequences_to_strings
 
 
@@ -97,6 +98,7 @@ class D3Sampler:
             steps=n_steps,
             denoise=self.config.sampling.noise_removal,
             device=torch.device(self._device),
+            dtype=autocast_dtype_for_cfg(self.config),
         )
 
         if labels is not None and not isinstance(labels, torch.Tensor):
@@ -136,6 +138,7 @@ class D3Sampler:
                 steps=n_steps,
                 denoise=self.config.sampling.noise_removal,
                 device=device,
+                dtype=autocast_dtype_for_cfg(self.config),
             )
 
             batch_labels = None
