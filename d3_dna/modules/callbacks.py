@@ -16,6 +16,7 @@ from pytorch_lightning import LightningModule, Trainer
 from pytorch_lightning.callbacks import Callback
 
 from d3_dna.models.diffusion import get_pc_sampler
+from d3_dna.modules.precision import autocast_dtype_for_cfg
 
 
 class BaseSPMSEValidationCallback(Callback, ABC):
@@ -114,6 +115,7 @@ class BaseSPMSEValidationCallback(Callback, ABC):
             pl_module.graph, pl_module.noise,
             (len(val_sequences), seq_length),
             "analytic", self.sampling_steps, device=device,
+            dtype=autocast_dtype_for_cfg(pl_module.cfg),
         )
 
         with torch.no_grad():

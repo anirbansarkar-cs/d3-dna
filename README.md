@@ -112,6 +112,19 @@ sampler.save(sequences, 'generated.fasta')
 | `TransformerModel` | D3-Tran architecture (config-driven) |
 | `ConvolutionalModel` | D3-Conv architecture (config-driven) |
 
+## Mixed precision
+
+Both training and sampling default to a per-architecture autocast policy, picked by `d3_dna.modules.precision.precision_for_cfg`:
+
+| Architecture | Lightning precision | Autocast dtype | GradScaler |
+|---|---|---|---|
+| `transformer` | `bf16-mixed` | `torch.bfloat16` | not used (bf16 has fp32 range) |
+| `convolutional` | `16-mixed` | `torch.float16` | installed automatically by Lightning |
+
+The same dtype flows through `get_score_fn` so the loss path and the sampling path share a single autocast policy. `LayerNorm` opts out of autocast and runs in fp32; `score.exp()` in the predictor path is on PyTorch's fp32-cast list, so the score and all post-model sampler arithmetic land in fp32 regardless of architecture.
+
+To override (e.g. when a checkpoint was trained under a different policy), set `cfg.training.precision: '16-mixed'` or `'bf16-mixed'` on the config. **Promoter is a known exception** — `examples/promoter/config_transformer.yaml` overrides the default back to `16-mixed` because the public `D3_Tran_Promoter.ckpt` on Zenodo was trained / validated under fp16 and degrades sharply if sampled in bf16. New transformer training runs in other examples should keep the bf16-mixed default.
+
 ## Architecture
 
 ```

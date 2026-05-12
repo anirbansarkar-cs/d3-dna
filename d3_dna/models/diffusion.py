@@ -435,15 +435,20 @@ def get_model_fn(model, train=False):
     return model_fn
 
 
-def get_score_fn(model, train=False, sampling=False):
-    """Create a score function wrapper around the model."""
+def get_score_fn(model, train=False, sampling=False, dtype=torch.float16):
+    """Create a score function wrapper around the model.
+
+    ``dtype`` controls the autocast dtype on CUDA. Default is fp16 (legacy
+    behavior); pass ``torch.bfloat16`` for transformer architectures where
+    bf16 is preferred for stability without a GradScaler.
+    """
     if sampling:
         assert not train, "Must sample in eval mode"
     model_fn = get_model_fn(model, train=train)
 
     def score_fn(x, sigma, labels=None):
         device_type = 'cuda' if x.is_cuda else 'cpu'
-        with torch.amp.autocast(device_type, dtype=torch.float16, enabled=(device_type == 'cuda')):
+        with torch.amp.autocast(device_type, dtype=dtype, enabled=(device_type == 'cuda')):
             sigma = sigma.reshape(-1)
             model_output = model_fn(x, sigma, labels)
             if isinstance(model_output, tuple):
@@ -610,7 +615,7 @@ class Denoiser:
 # SAMPLER FACTORIES
 # =============================================================================
 
-def get_sampling_fn(config, graph, noise, batch_dims, eps, device, viz_logger=None):
+def get_sampling_fn(config, graph, noise, batch_dims, eps, device, viz_logger=None, dtype=torch.float16):
     sampling_fn = get_pc_sampler(graph=graph,
                                  noise=noise,
                                  batch_dims=batch_dims,
@@ -619,18 +624,19 @@ def get_sampling_fn(config, graph, noise, batch_dims, eps, device, viz_logger=No
                                  denoise=config.sampling.noise_removal,
                                  eps=eps,
                                  device=device,
-                                 viz_logger=viz_logger)
+                                 viz_logger=viz_logger,
+                                 dtype=dtype)
     return sampling_fn
 
 
-def get_pc_sampler(graph, noise, batch_dims, predictor, steps, denoise=True, eps=1e-5, device=torch.device('cpu'), proj_fun=lambda x: x, viz_logger=None):
+def get_pc_sampler(graph, noise, batch_dims, predictor, steps, denoise=True, eps=1e-5, device=torch.device('cpu'), proj_fun=lambda x: x, viz_logger=None, dtype=torch.float16):
     predictor = get_predictor(predictor)(graph, noise)
     projector = proj_fun
     denoiser = Denoiser(graph, noise)
 
     @torch.no_grad()
     def pc_sampler(model, labels):
-        sampling_score_fn = get_score_fn(model, train=False, sampling=True)
+        sampling_score_fn = get_score_fn(model, train=False, sampling=True, dtype=dtype)
 
         x = graph.sample_limit(*batch_dims).to(device)
 
@@ -661,7 +667,8 @@ def get_guided_bridge_sampler(
     noise=None,
     Q=None,
     eps=1e-5,
-    viz_logger=None
+    viz_logger=None,
+    dtype=torch.float16,
 ):
     """Creates a sampling function for the guided discrete diffusion bridge."""
     if predictor_name == "euler_bridge":
@@ -701,7 +708,7 @@ def get_guided_bridge_sampler(
 
             def score_fn(x_current, time_current):
                 paired_input = torch.stack([x_current, start_sequence_xT.to(device)], dim=1)
-                sampling_score_fn = get_score_fn(model, train=False, sampling=True)
+                sampling_score_fn = get_score_fn(model, train=False, sampling=True, dtype=dtype)
                 scores = sampling_score_fn(paired_input, time_current, labels)
                 return scores
 

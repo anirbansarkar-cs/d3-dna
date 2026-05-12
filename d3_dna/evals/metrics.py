@@ -9,10 +9,10 @@ Oracle-based (require pre-computed (N, F) predictions):
     compute_ks_statistic   -- mean per-feature two-sample KS statistic
 
 Sequence-only (operate directly on (N, 4, L) one-hot arrays):
-    compute_js_divergence       -- Jensen-Shannon divergence at a single k
-    compute_js_spectrum         -- dict {k: JS divergence} over a list of k values
-    compute_mean_js_divergence  -- mean JS divergence over k values (default k=1..7)
-    compute_auroc               -- DiscriminabilityCNN classifier AUROC (real=1, gen=0)
+    compute_js_distance        -- Jensen-Shannon distance at a single k (sqrt of divergence)
+    compute_js_spectrum        -- dict {k: JS distance} over a list of k values
+    compute_mean_js_distance   -- mean JS distance over k values (default k=1..7)
+    compute_auroc              -- DiscriminabilityCNN classifier AUROC (real=1, gen=0)
 """
 
 import numpy as np
@@ -71,21 +71,27 @@ def _kmer_distribution(x, k):
     return counts / total
 
 
-def compute_js_divergence(x_real, x_gen, k):
-    """Jensen-Shannon divergence (base e) between k-mer distributions."""
+def compute_js_distance(x_real, x_gen, k):
+    """Jensen-Shannon distance between k-mer distributions.
+
+    `scipy.spatial.distance.jensenshannon` already returns the distance
+    (sqrt of the divergence with log base 2). We expose the distance directly
+    because it satisfies the triangle inequality and is in the same units as
+    the input distribution support — easier to compare across datasets than
+    the squared divergence.
+    """
     P = _kmer_distribution(x_real, k)
     Q = _kmer_distribution(x_gen, k)
-    d = scipy.spatial.distance.jensenshannon(P, Q)
-    return float(d ** 2)
+    return float(scipy.spatial.distance.jensenshannon(P, Q))
 
 
 def compute_js_spectrum(x_real, x_gen, ks):
-    """Return {k: JS divergence} for each k in ks."""
-    return {int(k): compute_js_divergence(x_real, x_gen, int(k)) for k in ks}
+    """Return {k: JS distance} for each k in ks."""
+    return {int(k): compute_js_distance(x_real, x_gen, int(k)) for k in ks}
 
 
-def compute_mean_js_divergence(x_real, x_gen, ks=range(1, 8)):
-    """Mean Jensen-Shannon divergence across k-mer lengths `ks` (default k=1..7)."""
+def compute_mean_js_distance(x_real, x_gen, ks=range(1, 8)):
+    """Mean Jensen-Shannon distance across k-mer lengths `ks` (default k=1..7)."""
     spec = compute_js_spectrum(x_real, x_gen, ks)
     return float(np.mean(list(spec.values())))
 

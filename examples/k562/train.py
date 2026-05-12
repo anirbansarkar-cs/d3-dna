@@ -1,37 +1,71 @@
 """
-Train a D3 transformer on K562 MPRA sequences with SP-MSE validation.
+Train a D3 model on K562 LentiMPRA sequences with SP-MSE validation.
 
 Usage:
-    python train.py
-    python train.py --resume outputs/k562/checkpoints/model-epoch=100-val_loss=260.ckpt
+    python train.py --config config_transformer.yaml
+    python train.py --config config_conv.yaml --output-dir outputs/k562_conv
+    python train.py --config config_transformer.yaml \\
+        --resume-from outputs/k562_transformer/checkpoints/last.ckpt
+
+Importable:
+    from train import main
+    main("config_conv.yaml", output_dir="outputs/...", resume_from=None)
 """
 
 import argparse
+from typing import Optional
+
 from omegaconf import OmegaConf
+
 from d3_dna import D3Trainer
-from data import K562Dataset
+from data import K562Dataset, get_data_file, get_oracle_file
 from callbacks import K562MSECallback
 
-cfg = OmegaConf.load("config.yaml")
 
-parser = argparse.ArgumentParser()
-parser.add_argument("--resume", type=str, default=None, help="Checkpoint to resume from")
-args = parser.parse_args()
+def main(
+    config: str,
+    output_dir: Optional[str] = None,
+    resume_from: Optional[str] = None,
+    data_file: Optional[str] = None,
+    oracle_file: Optional[str] = None,
+) -> None:
+    cfg = OmegaConf.load(config)
 
-train_ds = K562Dataset(cfg.paths.data_file, split="train")
-val_ds = K562Dataset(cfg.paths.data_file, split="valid")
+    data_path = get_data_file(cfg, override=data_file)
+    oracle_path = get_oracle_file(cfg, override=oracle_file)
 
-print(f"Train: {len(train_ds)} sequences, Val: {len(val_ds)} sequences")
+    train_ds = K562Dataset(data_path, split="train")
+    val_ds = K562Dataset(data_path, split="valid")
+    print(f"Train: {len(train_ds)} sequences, Val: {len(val_ds)} sequences")
 
-sp_mse_callback = K562MSECallback(
-    oracle_path=cfg.paths.oracle_model,
-    data_path=cfg.paths.data_file,
-    validation_freq_epochs=cfg.training.get("val_every_n_epochs", 4),
-    validation_samples=500,
-    sampling_steps=20,
-)
+    validation_samples = 500 if cfg.model.architecture == "transformer" else 1000
+    sp_mse_callback = K562MSECallback(
+        oracle_path=str(oracle_path),
+        data_path=str(data_path),
+        validation_freq_epochs=cfg.training.get("val_every_n_epochs", 4),
+        validation_samples=validation_samples,
+        sampling_steps=20,
+    )
 
-trainer = D3Trainer(cfg, work_dir="outputs/k562", callbacks=[sp_mse_callback])
-trainer.fit(train_ds, val_ds, resume_from=args.resume)
+    work_dir = output_dir or f"train_experiments/k562_{cfg.model.architecture}"
+    trainer = D3Trainer(cfg, work_dir=work_dir, callbacks=[sp_mse_callback])
+    trainer.fit(train_ds, val_ds, resume_from=resume_from)
 
-print("Training complete. Checkpoints saved to outputs/k562/checkpoints/")
+
+if __name__ == "__main__":
+    p = argparse.ArgumentParser()
+    p.add_argument("--config", required=True)
+    p.add_argument("--output-dir", default=None)
+    p.add_argument("--resume-from", default=None)
+    p.add_argument("--data-file", default=None,
+                   help="Override config; if absent, downloads from Zenodo.")
+    p.add_argument("--oracle-file", default=None,
+                   help="Override config; if absent, downloads from Zenodo.")
+    args = p.parse_args()
+    main(
+        config=args.config,
+        output_dir=args.output_dir,
+        resume_from=args.resume_from,
+        data_file=args.data_file,
+        oracle_file=args.oracle_file,
+    )

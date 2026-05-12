@@ -1,23 +1,10 @@
-"""Evaluate generated HepG2 sequences against the real test split.
+"""
+Template — evaluate.py for a new D3 example.
 
-Owns everything HepG2-specific:
-    * loading the H5 real-data layout (onehot_test -> (N, 4, 230))
-    * loading the LegNet oracle
-    * iterating over sample replicates (sample_*.npz or samples.npz) in --samples-dir
+Reference: examples/k562/evaluate.py.
 
-Delegates the metric math to d3_dna.D3Evaluator.
-
-Data + oracle weights resolve through data.py: CLI override > local cache >
-download from Zenodo.
-
-Usage:
-    python evaluate.py --samples-dir generated
-    python evaluate.py --samples-dir generated --tests mse,ks --kmer-ks 1-7
-    python evaluate.py --samples-dir generated --config config_conv.yaml
-
-Importable:
-    from evaluate import main
-    main(samples_dir="generated", tests="mse,ks")
+The only dataset-specific bit is `_load_real(...)` — how to read your test-split
+one-hot tensor in shape (N, 4, L). Everything else is shared boilerplate.
 """
 
 import argparse
@@ -27,21 +14,24 @@ import json
 import os
 from typing import Optional
 
-import h5py
 import numpy as np
 import torch
 from omegaconf import OmegaConf
 
 from d3_dna import D3Evaluator
 from data import get_data_file, get_oracle_file
-from oracle import load as load_legnet_oracle
+from oracle import load as load_minimal_oracle
 
 
-def _load_hepg2_real(h5_path: str) -> np.ndarray:
-    """Load the HepG2 test split one-hot (N, 4, 230) from the H5 file."""
-    with h5py.File(h5_path, "r") as f:
-        onehot = np.array(f["onehot_test"])  # (N, 230, 4)
-    return np.transpose(onehot, (0, 2, 1)).astype(np.float32)
+def _load_real(data_path: str) -> np.ndarray:
+    """Load the test split as one-hot (N, 4, sequence_length) float32.
+
+    Examples to copy from:
+        examples/k562/evaluate.py:_load_k562_real     — H5, transpose NHWC→NCHW
+        examples/promoter/evaluate.py:_load_promoter_real — NPZ
+        examples/deepstarr/evaluate.py:_load_deepstarr_real — H5, already NCHW
+    """
+    raise NotImplementedError("Read your test split, return (N, 4, L) np.float32.")
 
 
 def parse_ks(spec: str):
@@ -76,13 +66,13 @@ def main(
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
     data_path = get_data_file(cfg, override=data_file)
-    real = _load_hepg2_real(str(data_path))
-    print(f"[hepg2] real test split: shape={real.shape}")
+    real = _load_real(str(data_path))
+    print(f"[minimal] real test split: shape={real.shape}")
 
     oracle = None
     if any(t in ("mse", "ks") for t in test_list):
         oracle_path = get_oracle_file(cfg, override=oracle_file)
-        oracle = load_legnet_oracle(str(oracle_path), device)
+        oracle = load_minimal_oracle(str(oracle_path), device)
 
     ev = D3Evaluator(tests=test_list, device=device)
 
@@ -126,20 +116,14 @@ def main(
 
 
 if __name__ == "__main__":
-    p = argparse.ArgumentParser(description="Evaluate generated HepG2 sequences via D3Evaluator")
-    p.add_argument("--samples-dir", default="generated",
-                   help="Directory containing sample*.npz replicates")
+    p = argparse.ArgumentParser(description="Evaluate generated sequences via D3Evaluator")
+    p.add_argument("--samples-dir", default="generated")
     p.add_argument("--config", default="config_transformer.yaml")
-    p.add_argument("--data-file", default=None,
-                   help="Override config; if absent, downloads from Zenodo.")
-    p.add_argument("--oracle-file", default=None,
-                   help="Override config; if absent, downloads from Zenodo.")
+    p.add_argument("--data-file", default=None)
+    p.add_argument("--oracle-file", default=None)
     p.add_argument("--output-dir", default="eval_results")
-    p.add_argument("--tests", default="mse,ks,js,auroc",
-                   help="Comma-separated subset of {mse,ks,js,auroc}")
-    p.add_argument("--kmer-ks", default="6",
-                   help="k-mer length(s) for JS divergence. Single k='6' reports that k "
-                        "alone; interval '1-7' or list '3,6,7' reports the mean across them.")
+    p.add_argument("--tests", default="mse,ks,js,auroc")
+    p.add_argument("--kmer-ks", default="6")
     args = p.parse_args()
     main(
         samples_dir=args.samples_dir,
