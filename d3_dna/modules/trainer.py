@@ -387,23 +387,33 @@ class D3DataModule(pl.LightningDataModule):
         self.train_ds = self._train_ds
         self.val_ds = self._val_ds
 
+    def _num_workers(self) -> int:
+        # num_workers > 0 forks workers; under DDP the parent rank has already
+        # initialized CUDA and the pin_memory thread inside the forked worker
+        # crashes with "CUDA error: initialization error". Default to 0 under
+        # DDP, 2 single-GPU. Override via cfg.training.num_workers.
+        default = 0 if self.cfg.ngpus > 1 else 2
+        return int(self.cfg.training.get('num_workers', default))
+
     def train_dataloader(self):
         from torch.utils.data import DataLoader
+        num_workers = self._num_workers()
         return DataLoader(
             self.train_ds,
             batch_size=self.cfg.training.batch_size // (self.cfg.ngpus * self.cfg.training.accum),
-            num_workers=2,
+            num_workers=num_workers,
             pin_memory=True,
             shuffle=True,
-            persistent_workers=True,
+            persistent_workers=bool(num_workers),
         )
 
     def val_dataloader(self):
         from torch.utils.data import DataLoader
+        num_workers = self._num_workers()
         return DataLoader(
             self.val_ds,
             batch_size=self.cfg.eval.batch_size // (self.cfg.ngpus * self.cfg.training.accum),
-            num_workers=2,
+            num_workers=num_workers,
             pin_memory=True,
             shuffle=False,
         )
