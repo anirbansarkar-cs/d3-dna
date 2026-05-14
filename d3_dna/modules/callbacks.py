@@ -126,31 +126,40 @@ class BaseSPMSEValidationCallback(Callback, ABC):
                 pl_module.ema.copy_to(pl_module.score_model.parameters())
             try:
                 generated_sequences = sampling_fn(pl_module.score_model, val_targets)
-                if generated_sequences.unique().numel() <= 1:
-                    print("[sp-mse] WARNING: sampling produced degenerate sequences, skipping validation")
-                    return
                 val_score = self.get_oracle_predictions(val_sequences, device)
                 generated_score = self.get_oracle_predictions(generated_sequences, device)
                 sp_mse = (val_score - generated_score) ** 2
-                mean_sp_mse = torch.mean(sp_mse).cpu().item()
+                mean_sp_mse_t = torch.mean(sp_mse).to(device)
+                # Under DDP each rank computes its own mean (different validation
+                # subset + different stochastic sampling). All_reduce-average so
+                # every rank sees the same value; otherwise the conditional save
+                # below diverges across ranks and the next collective deadlocks.
+                if torch.distributed.is_available() and torch.distributed.is_initialized():
+                    torch.distributed.all_reduce(mean_sp_mse_t, op=torch.distributed.ReduceOp.AVG)
+                mean_sp_mse = mean_sp_mse_t.item()
 
-                pl_module.log("sp_mse/validation", mean_sp_mse, on_step=False, on_epoch=True, prog_bar=True, sync_dist=True)
-                pl_module.log("sp_mse/best", self.best_sp_mse, on_step=False, on_epoch=True, prog_bar=False, sync_dist=True)
+                pl_module.log("sp_mse/validation", mean_sp_mse, on_step=False, on_epoch=True, prog_bar=True, sync_dist=False)
+                pl_module.log("sp_mse/best", self.best_sp_mse, on_step=False, on_epoch=True, prog_bar=False, sync_dist=False)
 
                 if mean_sp_mse < self.best_sp_mse:
                     self.best_sp_mse = mean_sp_mse
                     self.steps_since_improvement = 0
-                    if self.best_checkpoint_path and os.path.exists(self.best_checkpoint_path):
-                        os.remove(self.best_checkpoint_path)
+                    # Compute paths on every rank — Lightning's save_checkpoint
+                    # is a collective and needs the same path everywhere.
                     if hasattr(trainer.logger, "save_dir") and trainer.logger.save_dir:
                         work_dir = trainer.logger.save_dir
                     else:
                         work_dir = trainer.default_root_dir
                     checkpoints_dir = os.path.join(work_dir, "checkpoints")
                     os.makedirs(checkpoints_dir, exist_ok=True)
+                    old_best = self.best_checkpoint_path
                     checkpoint_filename = f"sp-mse_{mean_sp_mse:.6f}_step_{trainer.global_step}.ckpt"
                     self.best_checkpoint_path = os.path.join(checkpoints_dir, checkpoint_filename)
                     trainer.save_checkpoint(self.best_checkpoint_path)
+                    # Cleanup is a plain filesystem op, NOT a collective —
+                    # restrict to rank 0 to avoid the FileNotFoundError race.
+                    if trainer.is_global_zero and old_best and os.path.exists(old_best):
+                        os.remove(old_best)
                 else:
                     self.steps_since_improvement += 1
                     if (self.early_stopping_patience is not None and
