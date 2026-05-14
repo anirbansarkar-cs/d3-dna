@@ -1,0 +1,84 @@
+# Zoonomia D3 Transformer config.
+#
+# NOTE: training is NOT wired for this example. The dataloader's X is
+# (B, 350, 5) one-hot and y is (B, 1, 2), neither matching D3LightningModule's
+# expected contract. See examples/zoonomia/README.md 'Not wired for training'.
+# These configs document the intended shapes only.
+
+dataset:
+  name: zoonomia
+  sequence_length: 350
+  num_classes: 5            # {N, A, C, G, T}
+  signal_dim: 2             # [cre_class_idx, species_idx]
+
+ngpus: 1
+nnodes: 1
+tokens: 5
+
+model:
+  name: small
+  type: ddit
+  architecture: transformer
+  hidden_size: 768
+  cond_dim: 128
+  length: 350               # must equal dataset.sequence_length
+  n_blocks: 12
+  n_heads: 12
+  scale_by_sigma: false
+  dropout: 0.1
+  class_dropout_prob: 0.1
+
+training:
+  batch_size: 256
+  accum: 1
+  max_epochs: 300
+  checkpoint_every_n_epochs: 4
+  log_freq: 500
+  val_every_n_epochs: 4
+  weight: standard
+  snapshot_sampling: true
+  ema: 0.9999
+
+optim:
+  optimizer: AdamW
+  lr: 0.0003
+  beta1: 0.9
+  beta2: 0.999
+  eps: 1.0e-08
+  weight_decay: 0
+  warmup: 2500
+  grad_clip: 1.0
+
+graph:
+  type: uniform
+  file: data
+  report_all: false
+
+noise:
+  type: geometric
+  sigma_min: 0.0001
+  sigma_max: 20
+
+sampling:
+  steps: 20
+  num_samples: 10
+  batch_size: 256
+  predictor: euler
+  noise_removal: true
+
+eval:
+  batch_size: 256
+  perplexity: false
+  perplexity_batch_size: 32
+
+wandb:
+  enabled: false
+  project: d3-zoonomia
+  name: zoonomia-transformer
+
+# Cluster-only data (not on Zenodo). Override at construction time via the
+# h5_path / bed_path kwargs of ZoonomiaDataset.
+data:
+  h5_path: /grid/koo/home/shared/d3/data/zoonomia/zoonomia_241.h5
+  bed_path: /grid/koo/home/shared/d3/data/zoonomia/GRCh38-cCREs.bed
+  species_index: 0
