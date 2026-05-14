@@ -38,13 +38,12 @@ def main(
     val_ds = K562Dataset(data_path, split="valid")
     print(f"Train: {len(train_ds)} sequences, Val: {len(val_ds)} sequences")
 
-    validation_samples = 500 if cfg.model.architecture == "transformer" else 1000
     sp_mse_callback = K562MSECallback(
         oracle_path=str(oracle_path),
         data_path=str(data_path),
         validation_freq_epochs=cfg.training.get("val_every_n_epochs", 4),
-        validation_samples=validation_samples,
-        sampling_steps=20,
+        validation_samples=1000,
+        sampling_steps=50,
     )
 
     work_dir = output_dir or f"train_experiments/k562_{cfg.model.architecture}"
