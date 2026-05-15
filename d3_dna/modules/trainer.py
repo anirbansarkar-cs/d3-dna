@@ -416,6 +416,7 @@ class D3DataModule(pl.LightningDataModule):
             num_workers=num_workers,
             pin_memory=True,
             shuffle=False,
+            persistent_workers=bool(num_workers),
         )
 
 
@@ -535,13 +536,15 @@ class D3Trainer:
             try:
                 from pytorch_lightning.loggers import WandbLogger
                 config_dict = OmegaConf.to_container(self.cfg, resolve=True)
+                wandb_id = self.cfg.wandb.get('id', None)
                 wandb_logger = WandbLogger(
                     project=self.cfg.wandb.get('project', 'd3-dna'),
                     name=self.cfg.wandb.get('name', None),
                     entity=self.cfg.wandb.get('entity', None),
                     config=config_dict,
                     save_dir=self.work_dir,
-                    id=self.cfg.wandb.get('id', None),
+                    id=wandb_id,
+                    resume='allow' if wandb_id else None,
                 )
                 loggers.append(wandb_logger)
             except ImportError:
