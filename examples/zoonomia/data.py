@@ -2,13 +2,11 @@
 Zoonomia 241-species dataset loader.
 
 Reads ENCODE cCRE windows from the 241-way multi-genome alignment at
-``/grid/koo/home/shared/d3/data/zoonomia/`` and yields fixed-length one-hot
-sequences with class+species labels. Only the basic dataloader is implemented
-here; the training/sampling/evaluation files in this example are stubs because
-the X/Y shapes deliberately diverge from D3's standard contract (see README).
+``/grid/koo/home/shared/d3/data/zoonomia/`` and yields fixed-length token-id
+sequences directly compatible with D3's discrete-diffusion trainer.
 
 Data sources:
-    zoonomia_241.h5     — 67 GB. Top-level groups chr1..chr22, chrX, chrY,
+    zoonomia_241.h5     — 67 GB. Top-level groups chr1..chr22, chrX,
                           each with `seq` of shape (241, chrom_length) uint8
                           and `phyloP` of shape (chrom_length,). Species axis 0
                           is Homo_sapiens. Nucleotide codes are direct uint8
@@ -18,13 +16,15 @@ Data sources:
                           Eight classes total (see CRE_CLASSES below).
 
 Output contract per __getitem__:
-    X: torch.FloatTensor of shape (sequence_length, NUC_CHANNELS) — one-hot.
-       Channel order mirrors the H5 uint8 codes directly, so
-       F.one_hot(seq.long(), num_classes=5) is a no-op remap (no lookup table).
-    y: torch.FloatTensor of shape (1, 2) — [[class_idx, species_idx]].
+    torch.LongTensor of shape (sequence_length,) — token ids in [0, NUM_TOKENS).
+    Token codes mirror the H5 uint8 values directly: 0=N, 1=A, 2=C, 3=G, 4=T.
+    This is exactly what D3LightningModule.training_step expects in the
+    unconditional path: a bare LongTensor batch routes to (batch, None).
 
-Both shapes deviate from D3's training-pipeline expectations
-(LongTensor[L] + FloatTensor[signal_dim]); the divergence is intentional.
+The per-sample (cCRE class, species) metadata is intentionally not returned
+— configs run unconditional (signal_dim=0). The mapping is still accessible
+via ``ZoonomiaDataset._index[idx] -> (chrom, mid, class_idx)`` for callers
+that need it.
 
 Unlike other examples, the data lives only on the Koo-lab cluster — there is
 no Zenodo record, so this module exposes no get_data_file / get_oracle_file /
@@ -40,14 +40,13 @@ from typing import Optional, Union
 import h5py
 import numpy as np
 import torch
-import torch.nn.functional as F
 from torch.utils.data import Dataset
 
 
 DEFAULT_H5 = Path("/grid/koo/home/shared/d3/data/zoonomia/zoonomia_241.h5")
 DEFAULT_BED = Path("/grid/koo/home/shared/d3/data/zoonomia/GRCh38-cCREs.bed")
 
-NUC_CHANNELS = 5  # 0=N, 1=A, 2=C, 3=G, 4=T (matches raw uint8 codes)
+NUM_TOKENS = 5  # vocab: 0=N, 1=A, 2=C, 3=G, 4=T (matches raw uint8 codes)
 
 CRE_CLASSES = (
     "CA",
@@ -156,9 +155,9 @@ class ZoonomiaDataset(Dataset):
     def __len__(self) -> int:
         return len(self._index)
 
-    def __getitem__(self, idx: int) -> tuple[torch.Tensor, torch.Tensor]:
+    def __getitem__(self, idx: int) -> torch.Tensor:
         self._ensure_open()
-        chrom, mid, class_idx = self._index[idx]
+        chrom, mid, _class_idx = self._index[idx]
 
         L = self._chrom_lengths[chrom]
         lo = mid - self.half
@@ -179,13 +178,7 @@ class ZoonomiaDataset(Dataset):
         else:
             raw = np.asarray(core, dtype=np.uint8)
 
-        seq = torch.from_numpy(np.ascontiguousarray(raw)).long()
-        X = F.one_hot(seq, num_classes=NUC_CHANNELS).float()
-        y = torch.tensor(
-            [[float(class_idx), float(self.species_index)]],
-            dtype=torch.float32,
-        )
-        return X, y
+        return torch.from_numpy(np.ascontiguousarray(raw)).long()
 
 
 if __name__ == "__main__":
@@ -196,10 +189,10 @@ if __name__ == "__main__":
         print(f"{split}: {len(ds):,} samples")
 
     ds = ZoonomiaDataset(split="train")
-    X, y = next(iter(DataLoader(ds, batch_size=4, num_workers=0)))
-    assert X.shape == (4, 350, NUC_CHANNELS), X.shape
-    assert X.dtype == torch.float32, X.dtype
-    assert y.shape == (4, 1, 2), y.shape
-    assert y.dtype == torch.float32, y.dtype
-    assert X.sum(-1).eq(1).all(), "X is not one-hot"
-    print("OK", X.shape, y.shape)
+    batch = next(iter(DataLoader(ds, batch_size=4, num_workers=0)))
+    assert batch.shape == (4, 350), batch.shape
+    assert batch.dtype == torch.long, batch.dtype
+    assert batch.min().item() >= 0 and batch.max().item() < NUM_TOKENS, (
+        batch.min().item(), batch.max().item()
+    )
+    print("OK", batch.shape, batch.dtype)

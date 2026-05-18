@@ -1,20 +1,17 @@
 """
 Train a D3 model on Zoonomia cCRE windows (human-only, unconditional).
 
-ZoonomiaDataset yields X: (L, 5) float one-hot and y: (1, 2) float
-[class_idx, species_idx]. The package's score model needs X as a LongTensor
-of token ids. A thin adapter does ``X.argmax(-1).long()`` and *drops* y so
-DataLoader collation produces a bare tensor batch. The default
-``D3LightningModule.process_batch`` then falls through to ``(batch, None)``
-and the loss is computed without labels — unconditional training.
+ZoonomiaDataset yields a bare ``LongTensor[L]`` of token ids (0=N, 1=A,
+2=C, 3=G, 4=T) — exactly what ``D3LightningModule.process_batch`` expects
+for the unconditional path (non-tuple batch routes to ``(batch, None)``).
+No adapter is needed.
 
-Config defaults (``config_{transformer,conv}.yaml``) already set
+Config defaults (``config_{transformer,conv}.yaml``) set
 ``dataset.signal_dim: 0`` and enable wandb at ``d3-cshl / d3-dna-ccre``, so
-this script ships no runtime overrides — only the dataset-shape adapter and
-an optional ``--ngpus`` for DDP.
+this script ships no runtime overrides except optional ``--ngpus`` for DDP.
 
-Tokens are kept at 5 (N, A, C, G, T). The N row is dead weight for
-species_index=0 training (verified: 0 Ns across 2k random windows). Mask
+Tokens are kept at 5 (N, A, C, G, T). The N row is effectively dead weight
+for species_index=0 since human-aligned windows almost never contain N; mask
 the logit for token 0 at sampling time if zero-N generation is required.
 
 Multi-GPU / DDP
@@ -47,31 +44,10 @@ except RuntimeError:
 import argparse
 from typing import Optional
 
-import torch
-from torch.utils.data import Dataset
 from omegaconf import OmegaConf, open_dict
 
 from d3_dna import D3Trainer
 from data import ZoonomiaDataset
-
-
-class _ZoonomiaUnconditionalAdapter(Dataset):
-    """Argmax one-hot X to token ids and drop y.
-
-    Returns a bare ``LongTensor[L]`` so DataLoader yields a single tensor
-    batch. ``D3LightningModule.process_batch`` then routes it as
-    ``(batch, None)`` and the loss runs without labels.
-    """
-
-    def __init__(self, base: ZoonomiaDataset):
-        self.base = base
-
-    def __len__(self) -> int:
-        return len(self.base)
-
-    def __getitem__(self, idx: int) -> torch.Tensor:
-        X, _ = self.base[idx]
-        return X.argmax(dim=-1).long()
 
 
 def _dataset_kwargs(cfg) -> dict:
@@ -99,8 +75,8 @@ def main(
             cfg.ngpus = int(ngpus)
 
     ds_kwargs = _dataset_kwargs(cfg)
-    train_ds = _ZoonomiaUnconditionalAdapter(ZoonomiaDataset(split="train", **ds_kwargs))
-    val_ds = _ZoonomiaUnconditionalAdapter(ZoonomiaDataset(split="val", **ds_kwargs))
+    train_ds = ZoonomiaDataset(split="train", **ds_kwargs)
+    val_ds = ZoonomiaDataset(split="val", **ds_kwargs)
 
     accum = int(cfg.training.get("accum", 1))
     per_rank_bs = int(cfg.training.batch_size) // (int(cfg.ngpus) * accum)
